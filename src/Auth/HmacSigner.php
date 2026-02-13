@@ -31,8 +31,10 @@ final class HmacSigner
      */
     public function sign(string $method, string $path, string $body, int $timestamp): string
     {
+        // Server koristi samo path bez query stringa (parse_url PHP_URL_PATH).
+        $pathOnly = parse_url($path, PHP_URL_PATH) ?: $path;
         $bodyHash = hash('sha256', $body);
-        $stringToSign = $timestamp . strtoupper($method) . $path . $bodyHash;
+        $stringToSign = $timestamp . strtoupper($method) . $pathOnly . $bodyHash;
 
         return base64_encode(
             hash_hmac('sha256', $stringToSign, $this->apiSecret, true)

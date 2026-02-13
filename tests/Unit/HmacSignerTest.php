@@ -121,6 +121,36 @@ final class HmacSignerTest extends TestCase
         $this->assertLessThanOrEqual($after, $timestamp);
     }
 
+    public function testSignStripsQueryStringFromPath(): void
+    {
+        $pathWithQuery = '/api/multitenant.php/pdf?pfr=ABC123&download=1';
+        $pathWithoutQuery = '/api/multitenant.php/pdf';
+
+        $sig1 = $this->signer->sign('GET', $pathWithQuery, '', 1705000000);
+        $sig2 = $this->signer->sign('GET', $pathWithoutQuery, '', 1705000000);
+
+        $this->assertSame($sig1, $sig2, 'Signature treba da bude ista sa i bez query stringa');
+    }
+
+    public function testSignWithQueryStringMatchesServerAlgorithm(): void
+    {
+        $secret = 'my-test-secret';
+        $signer = new HmacSigner($secret);
+
+        $pathWithQuery = '/api/multitenant.php/pdf?pfr=ZE4GVYYT&download=1';
+        $timestamp = 1705000000;
+
+        $signature = $signer->sign('GET', $pathWithQuery, '', $timestamp);
+
+        // Server koristi parse_url(REQUEST_URI, PHP_URL_PATH) - samo path deo.
+        $serverPath = parse_url($pathWithQuery, PHP_URL_PATH);
+        $bodyHash = hash('sha256', '');
+        $stringToSign = $timestamp . 'GET' . $serverPath . $bodyHash;
+        $expected = base64_encode(hash_hmac('sha256', $stringToSign, $secret, true));
+
+        $this->assertSame($expected, $signature);
+    }
+
     public function testEmptyBodyProducesValidSignature(): void
     {
         $signature = $this->signer->sign('GET', '/api/multitenant.php/status', '', 1705000000);
