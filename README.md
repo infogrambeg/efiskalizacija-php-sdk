@@ -1,6 +1,6 @@
 # eFiskalizacija PHP SDK
 
-PHP SDK za [eFiskalizacija.cloud](https://efiskalizacija.cloud) - fiskalizacija racuna u Srbiji (VSDC API).
+PHP SDK za [eFiskalizacija.cloud](https://efiskalizacija.cloud) - fiskalizacija računa u Srbiji (VSDC API).
 
 ## Zahtevi
 
@@ -14,7 +14,7 @@ PHP SDK za [eFiskalizacija.cloud](https://efiskalizacija.cloud) - fiskalizacija 
 composer require efiskalizacija/php-sdk
 ```
 
-## Brzi pocetak
+## Brzi početak
 
 ```php
 use Efiskalizacija\EfiskalizacijaClient;
@@ -26,7 +26,7 @@ use Efiskalizacija\Enum\PaymentType;
 // Kreiranje klijenta
 $client = EfiskalizacijaClient::create($apiKey, $apiSecret);
 
-// Kreiranje racuna
+// Kreiranje računa
 $invoice = Invoice::create()
     ->setInvoiceNumber('SHOP-2026-001')
     ->setPaymentType(PaymentType::Kartica)
@@ -51,13 +51,13 @@ echo $result->racunId;   // ID u sistemu
 ## API Metode
 
 ```php
-// Fiskalizacija racuna
+// Fiskalizacija računa
 $result = $client->fiskalizacija()->fiskalizuj($invoice);
 
 // Status tenanta
 $status = $client->status()->fetch();
 
-// Lista racuna
+// Lista računa
 $list = $client->invoices()->list(limit: 20, offset: 0);
 
 // PDF preuzimanje
@@ -71,7 +71,7 @@ $client->email()->send($pfrBroj, 'kupac@example.com');
 $test = $client->test()->run();
 ```
 
-## Nacini placanja
+## Načini plaćanja
 
 ```php
 use Efiskalizacija\Enum\PaymentType;
@@ -79,12 +79,12 @@ use Efiskalizacija\Enum\PaymentType;
 PaymentType::Gotovina   // Gotovina
 PaymentType::Kartica    // Platna kartica
 PaymentType::Virman     // Virmanski prenos
-PaymentType::Vaucer     // Vaucer
-PaymentType::Instant    // Instant placanje (IPS)
+PaymentType::Vaucer     // Vaučer
+PaymentType::Instant    // Instant plaćanje (IPS)
 PaymentType::Drugo      // Drugo bezgotovinsko
 ```
 
-### Split payment (podeljeno placanje)
+### Split payment (podeljeno plaćanje)
 
 ```php
 use Efiskalizacija\DTO\Payment;
@@ -103,8 +103,8 @@ use Efiskalizacija\DTO\Customer;
 // Pravno lice (PIB - 9 cifara)
 Customer::pravnoLice('123456789', 'Firma DOO', 'Adresa 1', 'Beograd');
 
-// Fizicko lice (JMBG - 13 cifara)
-Customer::fizickoLice('1234567890123', 'Petar Petrovic');
+// Fizičko lice (JMBG - 13 cifara)
+Customer::fizickoLice('1234567890123', 'Petar Petrović');
 
 // Javni sektor (JBKJS)
 Customer::javniSektor('12345', 'Ministarstvo');
@@ -119,11 +119,11 @@ Customer::anonimni('email@example.com');
 use Efiskalizacija\Enum\TaxCategory;
 
 new InvoiceItem(
-    naziv: 'Oslobodjena usluga',
+    naziv: 'Oslobođena usluga',
     kolicina: 1,
     jedinicnaCena: 5000.00,
     pdvStopa: 0,
-    pdvKategorija: TaxCategory::Oslobodjen,   // Oslobodjen PDV-a
+    pdvKategorija: TaxCategory::Oslobodjen,   // Oslobođen PDV-a
 );
 
 new InvoiceItem(
@@ -149,7 +149,7 @@ new InvoiceItem(
 
 // Procentualni popust (0-100%)
 new InvoiceItem(
-    naziv: 'Mis',
+    naziv: 'Miš',
     kolicina: 2,
     jedinicnaCena: 4500.00,
     pdvStopa: 20,
@@ -157,7 +157,7 @@ new InvoiceItem(
 );
 ```
 
-## Avansni racuni
+## Avansni računi
 
 ```php
 use Efiskalizacija\Enum\InvoiceType;
@@ -179,7 +179,7 @@ $refund = Invoice::create()
     ->setCustomer(Customer::pravnoLice('123456789'))
     ->addItem(new InvoiceItem(naziv: 'Refundacija avansa', kolicina: 1, jedinicnaCena: 50000, pdvStopa: 20));
 
-// 3. Konacni racun (referenca na avans refundaciju)
+// 3. Konačni račun (referenca na avans refundaciju)
 $final = Invoice::create()
     ->setReferentDocument($refundResult->pfrBroj)
     ->setPaymentType(PaymentType::Kartica)
@@ -193,7 +193,7 @@ $final = Invoice::create()
 $invoice->setIdempotencyKey('wc:a1b2c3d4:1234');
 ```
 
-Sprecava duplu fiskalizaciju istog racuna. Preporuceni format: `{sistem}:{site_hash}:{order_id}`.
+Sprečava duplu fiskalizaciju istog računa. Preporučeni format: `{sistem}:{site_hash}:{order_id}`.
 
 ## Error handling
 
@@ -212,10 +212,10 @@ try {
     // 400/422 - Neispravni podaci
     $errors = $e->getErrors();
 } catch (RateLimitException $e) {
-    // 429 - Previse zahteva
+    // 429 - Previše zahteva
     $retryAfter = $e->getRetryAfter(); // sekunde
 } catch (ServerException $e) {
-    // 500/503 - Greska na serveru (retry automatski)
+    // 500/503 - Greška na serveru (retry automatski)
 } catch (NetworkException $e) {
     // Timeout, DNS (retry automatski)
 }
@@ -223,17 +223,17 @@ try {
 
 ## Retry logika
 
-SDK automatski ponavlja zahteve za retryable greske:
+SDK automatski ponavlja zahteve za retryable greške:
 
-| Greska | Retry | Strategija |
-|--------|-------|------------|
-| 429 (Rate Limit) | Da | Exponential backoff |
-| 502 (Bad Gateway) | Da | Exponential backoff |
-| 503 (Unavailable) | Da | Exponential backoff |
-| 504 (Timeout) | Da | Exponential backoff |
-| Network error | Da | Exponential backoff |
-| 400/422 (Validacija) | Ne | Permanentan fail |
-| 401/403 (Auth) | Ne | Permanentan fail |
+| Greška                 | Retry | Strategija         |
+| ---------------------- | ----- | ------------------ |
+| 429 (Rate Limit)       | Da    | Exponential backoff |
+| 502 (Bad Gateway)      | Da    | Exponential backoff |
+| 503 (Unavailable)      | Da    | Exponential backoff |
+| 504 (Timeout)          | Da    | Exponential backoff |
+| Network error          | Da    | Exponential backoff |
+| 400/422 (Validacija)   | Ne    | Permanentan fail   |
+| 401/403 (Auth)         | Ne    | Permanentan fail   |
 
 Default: 3 retry-a, delay 1s/2s/4s. Konfigurisano u `Config`.
 
@@ -242,22 +242,22 @@ Default: 3 retry-a, delay 1s/2s/4s. Konfigurisano u `Config`.
 ```php
 use Efiskalizacija\Webhook\WebhookPayload;
 
-// U vasem webhook handler-u
+// U vašem webhook handler-u
 $payload = WebhookPayload::fromJson(file_get_contents('php://input'));
 
 if ($payload->isFiscalized()) {
-    // Racun uspesno fiskalizovan
+    // Račun uspešno fiskalizovan
     $pfr = $payload->pfrBroj;
 }
 
 if ($payload->isFailed()) {
-    // Fiskalizacija neuspesna
+    // Fiskalizacija neuspešna
 }
 ```
 
 ## Custom HTTP klijent
 
-SDK koristi cURL po defaultu. Mozete ubaciti svoj HTTP klijent (npr. za WordPress `wp_remote_request`):
+SDK koristi cURL po defaultu. Možete ubaciti svoj HTTP klijent (npr. za WordPress `wp_remote_request`):
 
 ```php
 use Efiskalizacija\Http\HttpClientInterface;
@@ -296,8 +296,8 @@ $config = new Config(
     baseUrl: 'https://efiskalizacija.cloud',  // default
     timeout: 30,              // HTTP timeout (sekunde)
     connectTimeout: 10,       // Connection timeout (sekunde)
-    maxRetries: 3,            // Broj retry pokusaja
-    retryBaseDelayMs: 1000,   // Pocetni delay (ms)
+    maxRetries: 3,            // Broj retry pokušaja
+    retryBaseDelayMs: 1000,   // Početni delay (ms)
     retryMultiplier: 2,       // Multiplier za exponential backoff
 );
 
