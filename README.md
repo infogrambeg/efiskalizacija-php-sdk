@@ -11,7 +11,7 @@ PHP SDK za [eFiskalizacija.cloud](https://efiskalizacija.cloud) - fiskalizacija 
 ## Instalacija
 
 ```bash
-composer require efiskalizacija/php-sdk
+composer require infogrambeg/efiskalizacija-php-sdk
 ```
 
 ## Brzi početak
