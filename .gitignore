@@ -1,0 +1,12 @@
+/vendor/
+composer.phar
+composer.lock
+.phpunit.result.cache
+.phpunit.cache/
+coverage/
+.phpstan/
+.idea/
+.vscode/
+*.cache
+.DS_Store
+.env
