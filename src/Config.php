@@ -7,7 +7,7 @@ namespace Efiskalizacija;
 final class Config
 {
     public const BASE_URL_PRODUCTION = 'https://efiskalizacija.cloud';
-    public const BASE_URL_SANDBOX = 'https://efiskalizacija.cloud';
+    public const BASE_URL_SANDBOX = 'https://staging.efiskalizacija.cloud';
 
     public const DEFAULT_TIMEOUT = 30;
     public const DEFAULT_CONNECT_TIMEOUT = 10;

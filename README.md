@@ -287,12 +287,49 @@ $client = new EfiskalizacijaClient($config, new WpHttpClient());
 
 ## Konfiguracija
 
+### Okruženja
+
+| Okruženje | URL | Namena |
+| --------- | --- | ------ |
+| Production | `https://efiskalizacija.cloud` | Pravi fiskalni računi |
+| Sandbox | `https://staging.efiskalizacija.cloud` | Testiranje integracije |
+
+```php
+// Sandbox (testiranje)
+$client = EfiskalizacijaClient::sandbox($apiKey, $apiSecret);
+
+// Production (podrazumevano)
+$client = EfiskalizacijaClient::create($apiKey, $apiSecret);
+```
+
+### Preporučena konfiguracija (.env)
+
+Nikad ne čuvajte API kredencijale u kodu. Koristite environment varijable:
+
+```env
+EFISK_API_KEY=efisk_1_abc123...
+EFISK_API_SECRET=your-64-char-secret
+EFISK_SANDBOX=true
+```
+
+```php
+$apiKey = $_ENV['EFISK_API_KEY'] ?? getenv('EFISK_API_KEY');
+$apiSecret = $_ENV['EFISK_API_SECRET'] ?? getenv('EFISK_API_SECRET');
+$sandbox = filter_var($_ENV['EFISK_SANDBOX'] ?? getenv('EFISK_SANDBOX'), FILTER_VALIDATE_BOOLEAN);
+
+$client = $sandbox
+    ? EfiskalizacijaClient::sandbox($apiKey, $apiSecret)
+    : EfiskalizacijaClient::create($apiKey, $apiSecret);
+```
+
+### Napredna konfiguracija
+
 ```php
 use Efiskalizacija\Config;
 
 $config = new Config(
-    apiKey: 'efisk_1_abc123...',
-    apiSecret: 'your-64-char-secret',
+    apiKey: $apiKey,
+    apiSecret: $apiSecret,
     baseUrl: 'https://efiskalizacija.cloud',  // default
     timeout: 30,              // HTTP timeout (sekunde)
     connectTimeout: 10,       // Connection timeout (sekunde)

@@ -1,6 +1,6 @@
 {
     "name": "infogrambeg/efiskalizacija-php-sdk",
-    "description": "PHP SDK za eFiskalizacija.cloud - fiskalizacija racuna u Srbiji (VSDC API)",
+    "description": "PHP SDK za eFiskalizacija.cloud - fiskalizacija računa u Srbiji (VSDC API)",
     "type": "library",
     "license": "MIT",
     "keywords": [
