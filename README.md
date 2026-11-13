@@ -11,8 +11,12 @@ PHP SDK za [eFiskalizacija.cloud](https://efiskalizacija.cloud) - fiskalizacija 
 ## Instalacija
 
 ```bash
-composer require infogrambeg/efiskalizacija-php-sdk
+composer require infogrambeg/efiskalizacija-php-sdk:^1.1
 ```
+
+Trenutna verzija: **1.1.0** (potpis zahteva v2, vidi „Potpis zahteva (HMAC v2)“). Verzija
+1.1.0 zahteva server sa podrškom za potpis v2 — `efiskalizacija.cloud` i
+`staging.efiskalizacija.cloud` je imaju od 2026-11-13.
 
 ## Brzi početak
 
@@ -221,6 +225,72 @@ try {
 }
 ```
 
+## Potpis zahteva (HMAC v2)
+
+Od verzije **1.1.0** SDK klijent svaki zahtev potpisuje potpisom **v2**
+(`HmacSigner::getAuthHeadersV2()`) i šalje zaglavlje `X-Signature-Version: 2`:
+
+```
+stringToSign = "v2:" + X-Timestamp + METHOD + requestTarget + SHA256(body)
+X-Signature  = Base64(HMAC-SHA256(apiSecret, stringToSign))
+```
+
+`requestTarget` je putanja API-ja **sa query stringom**, tačno kako se šalje (npr.
+`/api/multitenant.php/pdf?pfr=ABC-1&download=1`), bez dekodiranja, sortiranja i
+normalizacije. Server proverava potpis nad sirovim `REQUEST_URI`, pa zahtev kome je query
+izmenjen posle potpisa dobija `401`.
+
+Query string SDK kodira po RFC 3986 (razmak je `%20`, `~` ostaje nekodiran), a `?` dodaje
+samo uz neprazan query. Taj oblik Guzzle, Symfony HttpClient i WordPress HTTP API šalju
+neizmenjen.
+
+- Ako koristite sopstveni HTTP klijent (vidi „Custom HTTP klijent“), on mora poslati
+  `$url` bajt-identično kako ga je SDK predao — bez ponovnog kodiranja ili preuređivanja
+  parametara — i proslediti sva zaglavlja, uključujući `X-Signature-Version`.
+- Bazni URL (`Config` `baseUrl`) treba da bude **koren hosta** (npr.
+  `https://efiskalizacija.cloud`), jer je server uvek na `/api/multitenant.php`. Putanja
+  baznog URL-a se NE potpisuje: bazni URL sa putanjom (npr. `https://primer.rs/efisk`)
+  radi samo iza gateway-a koji taj prefiks skida pre servera.
+- Starije verzije potpisuju v1 (bez zaglavlja `X-Signature-Version`). Server v1 proverava
+  nad putanjom **bez** query stringa. Samo **1.0.2** pre potpisa odseca query, pa prolazi i
+  za GET sa parametrima (`/pdf`, `/invoice`); **1.0.0 i 1.0.1** potpisuju putanju sa
+  query-jem, pa takav GET dobija `401`. Server i dalje prima v1 na fiskalnim rutama, ali za
+  nove integracije koristite 1.1.0 ili noviju.
+
+### Promene u 1.1.0
+
+- Svaki zahtev SDK klijenta potpisuje se v2 (cilj sa query stringom) i nosi
+  `X-Signature-Version: 2`.
+- Nove metode `HmacSigner::signV2()` i `HmacSigner::getAuthHeadersV2()`. Postojeće
+  `sign()` i `getAuthHeaders()` su nepromenjene (v1, kao u 1.0.2).
+- Query string se kodira po RFC 3986: razmak je `%20` (ranije `+`), `~` ostaje nekodiran
+  (ranije `%7E`), separator je uvek `&` (nezavisno od `arg_separator.output`), a query
+  bez vrednosti (npr. samo `null`) ne dodaje `?`.
+- Ponovni pokušaj dobija strogo veći `X-Timestamp` od prethodnog pokušaja istog poziva
+  (vidi „Retry logika“), bez dodatnog čekanja.
+- `AbstractApi::__construct()` ima dva nova opciona parametra, `$clock` i `$sleep`
+  (zamena sata i pauze, npr. u testovima); postojeći pozivi se ne menjaju.
+
+### Nadogradnja sa 1.0.x
+
+Za korisnike koji samo pozivaju metode klijenta (`$client->fiskalizacija()`,
+`->invoices()`, `->pdf()` …) nadogradnja ne traži izmene koda. Izmene mogu trebati u
+ovim slučajevima:
+
+- **Direktan poziv `HmacSigner::sign()` / `getAuthHeaders()`** (sopstveni potpis bez SDK
+  klijenta) i dalje radi bez izmena: obe metode potpisuju v1 bajt-isto kao 1.0.2 (query
+  se odseca, bez `X-Signature-Version`). Za v2 pređite na `signV2()` /
+  `getAuthHeadersV2()`: `$target` je tačan cilj **sa query-jem** kako se šalje, a zahtev
+  mora nositi zaglavlje `X-Signature-Version: 2` — `getAuthHeadersV2()` ga vraća,
+  `signV2()` ne.
+- **Sopstveni `HttpClientInterface`**: mora poslati `$url` bez prepakivanja (vidi gore).
+- **Bazni URL sa putanjom**: vidi gore.
+
+Povratak na `1.0.2` (`composer require infogrambeg/efiskalizacija-php-sdk:1.0.2`) radi,
+jer server i dalje prima potpis v1. Objekat koji je serijalizovala 1.1.0, a deserijalizuje
+ga 1.0.2 na PHP ≥ 8.2, daje E_DEPRECATED za dinamička svojstva `$clock` i `$sleep`
+(„Creation of dynamic property“); zahtevi rade.
+
 ## Retry logika
 
 SDK automatski ponavlja zahteve za retryable greške:
@@ -236,6 +306,19 @@ SDK automatski ponavlja zahteve za retryable greške:
 | 401/403 (Auth)         | Ne    | Permanentan fail   |
 
 Default: 3 retry-a, delay 1s/2s/4s. Konfigurisano u `Config`.
+
+Svaki ponovni pokušaj se potpisuje iznova i dobija **strogo veći** `X-Timestamp` od
+prethodnog pokušaja, pa nijedna dva pokušaja nemaju isti potpis: timestamp pokušaja je
+max(tekući sat, prethodni + 1), bez ikakvog dodatnog čekanja. Prvi pokušaj nosi tekući
+sat. Kad su pokušaji brži od 1 s (razmak ispod 1 s), timestamp može biti ispred sata
+najviše za k sekundi, gde je k broj ponovljenih pokušaja do tog trenutka (najviše
+`maxRetries`); kad sat tokom poziva skoči unazad za J sekundi, za J + k. Server prihvata
+timestamp ±300 s od svog sata, pa sat servera i klijenta treba da budu sinhronizovani
+(NTP).
+
+Granica: `maxRetries` nije ograničen, a pomak raste do k = `maxRetries` sekundi. Uz razmak
+0 (svi pokušaji u istoj sekundi) timestamp izlazi iz tolerancije servera od ~302. pokušaja,
+pa `maxRetries` treba da bude daleko ispod 300 (podrazumevano 3).
 
 ## Webhook
 
