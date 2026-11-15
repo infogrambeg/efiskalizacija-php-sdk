@@ -14,7 +14,7 @@ final class FiskalizacijaApi extends AbstractApi
      *
      * @throws \Efiskalizacija\Exception\EfiskalizacijaException
      */
-    public function fiskalizuj(Invoice $invoice): FiskalizacijaResult
+    public function fiskalizuj(#[\SensitiveParameter] Invoice $invoice): FiskalizacijaResult
     {
         $response = $this->post('/fiskalizacija', $invoice->toArray());
 

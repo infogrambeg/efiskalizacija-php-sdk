@@ -24,6 +24,19 @@ abstract class AbstractApi
 
     private const RETRYABLE_STATUS_CODES = [429, 502, 503, 504];
 
+    /**
+     * Podskup `RETRYABLE_STATUS_CODES` koji server vraća PRE obrade zahteva
+     * (ograničenje učestalosti): ponavlja se i zahtev koji nije bezbedan za
+     * ponavljanje. Na 502, 503 i 504 se ne zna da li je server zahtev
+     * obradio: 503 ne vraća samo aplikacija, nego i Apache (`mod_proxy_fcgi`,
+     * text/html, bez `Retry-After`) kad je PHP zahtev već obradio, a odgovor
+     * nije stigao do Apache-a (radnik prekinut, `request_terminate_timeout`).
+     */
+    private const RETRYABLE_BEFORE_PROCESSING = [429];
+
+    /** Jedina ruta na kojoj server ponovljen POST prepoznaje (po `broj_racuna`). */
+    private const IDEMPOTENT_POST_PATH = '/fiskalizacija';
+
     protected Config $config;
     private HttpClientInterface $httpClient;
     private HmacSigner $signer;
@@ -78,7 +91,7 @@ abstract class AbstractApi
      * @param array<string, string> $query Query parametri
      * @return array<string, mixed> Parsed API response
      */
-    protected function post(string $endpoint, ?array $data = null): array
+    protected function post(string $endpoint, #[\SensitiveParameter] ?array $data = null): array
     {
         $body = $data !== null ? json_encode($data, JSON_UNESCAPED_UNICODE) : '';
 
@@ -126,7 +139,7 @@ abstract class AbstractApi
     /**
      * @return array<string, mixed>
      */
-    private function requestWithRetry(string $method, string $path, string $body): array
+    private function requestWithRetry(string $method, string $path, #[\SensitiveParameter] string $body): array
     {
         $response = $this->requestRawWithRetry($method, $path, $body);
         $json = $response->json();
@@ -142,7 +155,31 @@ abstract class AbstractApi
         return $json;
     }
 
-    private function requestRawWithRetry(string $method, string $path, string $body): Response
+    /**
+     * Šalje zahtev i ponavlja ga posle prolazne greške samo kad je zahtev
+     * bezbedan za ponavljanje ili kad je sigurno da ga server nije obradio
+     * (ponavljanje nebezbednog zahteva bi moglo da napravi dupli fiskalni
+     * račun ili drugi mejl):
+     *
+     * - zahtev bezbedan za ponavljanje ({@see self::isSafeToRepeat()}) se
+     *   ponavlja na `NetworkException` i na 429, 502, 503, 504;
+     * - ostali zahtevi se ponavljaju samo na 429 (server ga vraća pre obrade)
+     *   i na `NetworkException` sa `wasRequestSent() === false` (zahtev
+     *   sigurno nije poslat). Na 502, 503, 504 i mrežnu grešku posle koje se
+     *   ne zna da li je zahtev stigao, izuzetak se baca odmah, bez pauze,
+     *   uz WARNING (metoda, putanja bez query-ja, pokušaj, uzrok — bez tela,
+     *   ključa i potpisa). Klijent tada proverava ishod pre novog slanja.
+     *
+     * Ni bezbedan zahtev nema potpunu garanciju (vidi
+     * {@see self::isSafeToRepeat()}): kad se obrada na serveru prekine ili ne
+     * uspe posle fiskalizacije, server račun nije upisao (ne vidi se ni u
+     * listi računa ni u admin panelu), pa ponovljen zahtev sa istim brojem
+     * izdaje drugi račun. Kad ishod ostane nepoznat i posle poslednjeg
+     * pokušaja, sa brojem računa ili bez njega, klijent proverava račun pre
+     * novog slanja; provera nalazi samo upisan račun, pa kad ga ne nađe,
+     * klijent se pre novog slanja obraća podršci.
+     */
+    private function requestRawWithRetry(string $method, string $path, #[\SensitiveParameter] string $body): Response
     {
         // Granica važi i za Config koji nije prošao konstruktor (npr.
         // `unserialize()` objekta iz 1.1.0): najviše 1 + MAX_RETRIES zahteva.
@@ -158,6 +195,7 @@ abstract class AbstractApi
         $maxAttempts = $retries + 1;
         $lastException = null;
         $lastTimestamp = null;
+        $safeToRepeat = self::isSafeToRepeat($method, $path, $body);
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             try {
@@ -195,10 +233,17 @@ abstract class AbstractApi
                     return $response;
                 }
 
+                $retryable = in_array($response->statusCode, self::RETRYABLE_STATUS_CODES, true);
                 if (
-                    in_array($response->statusCode, self::RETRYABLE_STATUS_CODES, true)
-                    && $attempt < $maxAttempts
+                    $retryable
+                    && !$safeToRepeat
+                    && !in_array($response->statusCode, self::RETRYABLE_BEFORE_PROCESSING, true)
                 ) {
+                    $this->warnUnknownOutcome($method, $path, $attempt, ['status' => $response->statusCode]);
+                    $this->throwForStatus($response);
+                }
+
+                if ($retryable && $attempt < $maxAttempts) {
                     $delayMs = $this->calculateDelay($attempt);
                     $this->logger->warning('Retryable greska, ponovni pokusaj', [
                         'status' => $response->statusCode,
@@ -212,6 +257,11 @@ abstract class AbstractApi
                 $this->throwForStatus($response);
             } catch (NetworkException $e) {
                 $lastException = $e;
+                if (!$safeToRepeat && $e->wasRequestSent() !== false) {
+                    $this->warnUnknownOutcome($method, $path, $attempt, ['exception_class' => $e::class]);
+
+                    throw $e;
+                }
                 if ($attempt < $maxAttempts) {
                     $delayMs = $this->calculateDelay($attempt);
                     $this->logger->warning('Mrezna greska, ponovni pokusaj', [
@@ -232,6 +282,56 @@ abstract class AbstractApi
         // @codeCoverageIgnoreStart
         throw new EfiskalizacijaException('Iscrpljeni svi pokusaji');
         // @codeCoverageIgnoreEnd
+    }
+
+    /**
+     * Da li SDK sme sam da ponovi zahtev čiji ishod nije poznat: GET, ili
+     * `POST /fiskalizacija` (putanja bez query-ja) čije telo nosi
+     * `broj_racuna` — skalar koji nije bool, a posle `trim` nije prazan. To je
+     * isto pravilo kao serverski `ClientReferenceGuard::normalize`: server
+     * prepoznaje već upisan račun sa istim brojem i vraća ga umesto novog.
+     * Ostaje prozor: server fiskalizuje račun pre nego što ga upiše, pa kad
+     * se obrada prekine ili ne uspe posle fiskalizacije (pad servera, istek
+     * odgovora Poreske uprave), račun postoji bez zapisa i ponovljen zahtev
+     * sa istim brojem izdaje drugi račun. Sve ostalo (POST bez
+     * broja, `/send-email`, `/test`, POST iz podklase na drugu rutu ili bez
+     * broja računa) SDK ne ponavlja kad ishod nije poznat. Pravilo gleda samo
+     * metodu, putanju i telo, pa se POST iz podklase na `/fiskalizacija` sa
+     * brojem ponavlja kao `fiskalizuj()` sa brojem.
+     */
+    private static function isSafeToRepeat(string $method, string $path, #[\SensitiveParameter] string $body): bool
+    {
+        if ($method === 'GET') {
+            return true;
+        }
+        if ($method !== 'POST' || explode('?', $path, 2)[0] !== self::IDEMPOTENT_POST_PATH) {
+            return false;
+        }
+
+        $data = json_decode($body, true);
+        if (!is_array($data) || !array_key_exists('broj_racuna', $data)) {
+            return false;
+        }
+        $broj = $data['broj_racuna'];
+
+        return is_scalar($broj) && !is_bool($broj) && trim((string) $broj) !== '';
+    }
+
+    /**
+     * WARNING kad SDK ne ponavlja zahtev jer se ne zna da li ga je server
+     * obradio. Kontekst je beli spisak: metoda, putanja bez query-ja, pokušaj
+     * i uzrok (status ili klasa izuzetka) — nikad telo, ključ, potpis ni
+     * poruka izuzetka.
+     *
+     * @param array{status?: int, exception_class?: class-string} $uzrok
+     */
+    private function warnUnknownOutcome(string $method, string $path, int $attempt, array $uzrok): void
+    {
+        $this->logger->warning('Ishod zahteva nije poznat, zahtev nije ponovljen', [
+            'method' => $method,
+            'path' => explode('?', $path, 2)[0],
+            'attempt' => $attempt,
+        ] + $uzrok);
     }
 
     /**

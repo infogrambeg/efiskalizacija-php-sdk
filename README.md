@@ -194,10 +194,31 @@ $final = Invoice::create()
 ## Idempotency
 
 ```php
-$invoice->setIdempotencyKey('wc:a1b2c3d4:1234');
+$invoice->setInvoiceNumber('SHOP-2026-001'); // jedinstven broj iz vašeg sistema, npr. broj narudžbine
 ```
 
-Sprečava duplu fiskalizaciju istog računa. Preporučeni format: `{sistem}:{site_hash}:{order_id}`.
+Zaštita od duplog fiskalnog računa je broj računa (`setInvoiceNumber()`, polje
+`broj_racuna`): server prepoznaje već upisan račun sa istim brojem i vraća ga umesto
+novog. Zato SDK `POST /fiskalizacija` sa nepraznim brojem sme sam da ponovi i kad se ne
+zna da li je prvi zahtev obrađen (vidi „Retry logika“), a isto važi i kad vi ponovite
+poziv sa istim brojem.
+
+Zaštita ima prozor: server račun fiskalizuje pre nego što ga upiše. Kad se obrada na
+serveru prekine ili ne uspe posle fiskalizacije (pad servera, istek odgovora Poreske
+uprave, posle kog server vraća neuspeh), račun postoji kod Poreske uprave, ali ga server
+nije upisao, pa se ne vidi ni u `invoices()->list()` ni u admin panelu, a ponovljen zahtev
+sa istim brojem izdaje drugi račun. Provera (`invoices()->list()` ili admin panel) nalazi
+samo upisan račun i korisna je pre svega za zahtev bez broja. Zato, kad ishod ostane
+nepoznat i posle poslednjeg pokušaja, sa brojem računa ili bez njega, proverite da li je
+račun izdat, a kad ga provera ne nađe, pre novog slanja obratite se podršci.
+
+Bez broja računa svaki zahtev koji server obradi daje nov račun. Od 1.2.0 SDK takav
+zahtev ne ponavlja kad ishod nije poznat (prekid veze posle slanja, 502, 503, 504), nego baca
+izuzetak: pre novog slanja proverite da li je račun izdat (npr. `invoices()->list()` ili
+admin panel).
+
+`setIdempotencyKey()` / `getIdempotencyKey()` su od 1.2.0 zastareli (`@deprecated`):
+ključ se čuva u objektu, ali se ne šalje serveru i ne štiti od duplog računa.
 
 ## Error handling
 
@@ -219,9 +240,10 @@ try {
     // 429 - Previše zahteva
     $retryAfter = $e->getRetryAfter(); // sekunde
 } catch (ServerException $e) {
-    // 500/503 - Greška na serveru (retry automatski)
+    // 5xx - Greška na serveru (posle automatskih ponavljanja, vidi „Retry logika“)
 } catch (NetworkException $e) {
-    // Timeout, DNS (retry automatski)
+    // Timeout, DNS, konekcija. $e->wasRequestSent(): false = zahtev nije poslat,
+    // true ili null = možda je obrađen — bez broja računa proverite ishod pre novog slanja
 }
 ```
 
@@ -256,6 +278,42 @@ neizmenjen.
   za GET sa parametrima (`/pdf`, `/invoice`); **1.0.0 i 1.0.1** potpisuju putanju sa
   query-jem, pa takav GET dobija `401`. Server i dalje prima v1 na fiskalnim rutama, ali za
   nove integracije koristite 1.1.0 ili noviju.
+
+### Promene u 1.2.0 (neobjavljeno)
+
+- **Ponavljanje zahteva čiji ishod nije poznat.** SDK sam ponavlja samo zahtev bezbedan
+  za ponavljanje: GET i `POST /fiskalizacija` čije telo nosi `broj_racuna` koji posle
+  `trim` nije prazan (server prepoznaje već upisan račun sa istim brojem i vraća ga umesto
+  novog; ostaje prozor kad se obrada na serveru prekine ili ne uspe posle fiskalizacije:
+  server tada račun nije upisao, pa ponovljen zahtev sa istim brojem izdaje drugi račun, vidi
+  „Idempotency“). Ostali
+  zahtevi (`fiskalizuj()` bez broja računa, `email()->send()`, `test()->run()`, POST iz
+  sopstvene podklase `AbstractApi` na drugu rutu ili bez broja računa) šalju se tačno
+  jednom kad se ne zna da li ih je server obradio: posle 502, 503 i 504 i posle mrežne
+  greške za koju nije sigurno da zahtev nije poslat. Izuzetak se baca odmah, bez pauze,
+  uz WARNING (metoda, putanja bez query-ja, pokušaj, status ili klasa izuzetka — bez
+  tela, ključa i potpisa). Na 429 (server ga vraća pre obrade) i kad zahtev sigurno nije
+  poslat, ponavljaju se kao ranije. 503 ne vraća samo aplikacija: Apache ga vraća i kad
+  je PHP zahtev već obradio, a odgovor se izgubio (prekinut radnik, istek roka obrade).
+  Do 1.1.1 SDK je ponavljao svaki zahtev, pa je `fiskalizuj()` bez broja računa posle
+  isteka roka mogao da izda dva računa.
+- `NetworkException::wasRequestSent(): ?bool` — `false` samo kad je sigurno da zahtev
+  nije poslat, `true` kad jeste, `null` kad se ne zna. Konstruktor ima nov opcioni
+  parametar `requestSent` (podrazumevano `null`), postojeći pozivi se ne menjaju.
+  `CurlHttpClient` postavlja `false` samo kad cURL nije poslao nijedan bajt zahteva
+  (`CURLINFO_REQUEST_SIZE` = 0: zatvoren port, nerazrešiv host, neuspela TLS veza), inače
+  `true`.
+- `#[\SensitiveParameter]` nose i parametri sa zaglavljima i telom zahteva duž cele
+  putanje slanja: `FiskalizacijaApi::fiskalizuj`, `EmailApi::send`, `CurlHttpClient::request`,
+  telo u `AbstractApi`, ključ i telo u `HmacSigner::sign`, `signV2`, `getAuthHeaders` i
+  `getAuthHeadersV2`. Na PHP ≥ 8.2 trag `NetworkException` iz `CurlHttpClient`
+  (`getTrace()`, `(string) $e`) više ne sadrži API ključ, potpis ni telo zahteva. Na PHP
+  8.1 atribut nema efekta (uključite `zend.exception_ignore_args=On`). Sopstveni
+  `HttpClientInterface` atribut ne nasleđuje — dodajte ga na svoje parametre.
+- `Invoice::setIdempotencyKey()` / `getIdempotencyKey()` su `@deprecated`: ključ se ni
+  ranije nije slao serveru. Zaštita od duplog računa je `setInvoiceNumber()`.
+- Potpis zahteva (v2) je bez promene. Potpisi javnih metoda su isti, osim što konstruktor
+  `NetworkException` ima nov opcioni parametar `requestSent` (vidi gore).
 
 ### Promene u 1.1.1
 
@@ -301,6 +359,20 @@ neizmenjen.
 - `AbstractApi::__construct()` ima dva nova opciona parametra, `$clock` i `$sleep`
   (zamena sata i pauze, npr. u testovima); postojeći pozivi se ne menjaju.
 
+### Nadogradnja na 1.2.0
+
+Za fiskalizaciju **sa** brojem računa (`setInvoiceNumber()`) i za GET metode ponašanje je
+isto kao u 1.1.1. Izmene mogu trebati u ovim slučajevima:
+
+- **`fiskalizuj()` bez broja računa, `email()->send()`, `test()->run()`**: posle prekida
+  veze, 502, 503 ili 504 dobijate izuzetak posle prvog pokušaja. Pre novog slanja proverite da
+  li je zahtev obrađen; za fiskalizaciju je najbolje da uvek šaljete broj računa.
+- **Sopstveni `HttpClientInterface`** koji baca `NetworkException`: bez `requestSent`
+  SDK tretira ishod kao nepoznat i takav POST ne ponavlja. Prosledite
+  `requestSent: false` samo kad je sigurno da nijedan bajt zahteva nije poslat.
+- **Kod koji koristi `setIdempotencyKey()`** radi i dalje (zastarelo upozorenje samo u
+  alatima za statičku analizu); dodajte `setInvoiceNumber()`.
+
 ### Nadogradnja sa 1.0.x
 
 Za korisnike koji samo pozivaju metode klijenta (`$client->fiskalizacija()`,
@@ -327,19 +399,46 @@ ga 1.0.2 na PHP ≥ 8.2, daje E_DEPRECATED za dinamička svojstva `$clock` i `$s
 
 ## Retry logika
 
-SDK automatski ponavlja zahteve za retryable greške:
+SDK automatski ponavlja zahtev posle prolazne greške (exponential backoff), ali od 1.2.0
+samo zahtev bezbedan za ponavljanje ili zahtev za koji je sigurno da ga server nije
+obradio. Zahtev je **bezbedan za
+ponavljanje** kad je GET ili `POST /fiskalizacija` čije telo nosi `broj_racuna` koji
+posle `trim` nije prazan (vidi „Idempotency“). Svi ostali zahtevi — `fiskalizuj()` bez
+broja računa, `email()->send()`, `test()->run()`, POST iz sopstvene podklase na drugu
+rutu ili bez broja računa — ponavljaju se samo kad je sigurno da server zahtev nije
+obradio:
 
-| Greška                 | Retry | Strategija         |
-| ---------------------- | ----- | ------------------ |
-| 429 (Rate Limit)       | Da    | Exponential backoff |
-| 502 (Bad Gateway)      | Da    | Exponential backoff |
-| 503 (Unavailable)      | Da    | Exponential backoff |
-| 504 (Timeout)          | Da    | Exponential backoff |
-| Network error          | Da    | Exponential backoff |
-| 400/422 (Validacija)   | Ne    | Permanentan fail   |
-| 401/403 (Auth)         | Ne    | Permanentan fail   |
+| Greška                              | GET i `POST /fiskalizacija` sa brojem | Ostali zahtevi |
+| ----------------------------------- | ------------------------------------- | -------------- |
+| 429 (Rate Limit)                    | Da                                    | Da             |
+| 502 (Bad Gateway)                   | Da                                    | Ne             |
+| 503 (Unavailable)                   | Da                                    | Ne             |
+| 504 (Gateway Timeout)               | Da                                    | Ne             |
+| Mrežna greška, zahtev nije poslat   | Da                                    | Da             |
+| Mrežna greška, ishod nepoznat       | Da                                    | Ne             |
+| 400 (Validacija)                    | Ne                                    | Ne             |
+| 401 (Auth)                          | Ne                                    | Ne             |
+| 403 (Zabranjeno)                    | Ne                                    | Ne             |
+| 422 (Validacija)                    | Ne                                    | Ne             |
 
-Default: 3 retry-a, delay 1s/2s/4s. Konfigurisano u `Config`.
+429 server vraća pre obrade zahteva (ograničenje učestalosti). Za 503 to ne važi: Apache
+(`mod_proxy_fcgi`) ga vraća, kao HTML bez `Retry-After`, i kad je PHP zahtev već obradio,
+a odgovor se izgubio (prekinut radnik, istek roka obrade). „Zahtev nije poslat“ je
+`NetworkException` sa `wasRequestSent() === false` (`CurlHttpClient`: cURL nije poslao
+nijedan bajt — zatvoren port, nerazrešiv host, neuspela TLS veza). „Ishod nepoznat“ je
+svaka druga mrežna greška (npr. istek roka posle slanja). Kad SDK zahtev ne ponovi zato
+što ishod nije poznat, izuzetak se baca odmah, bez pauze, uz WARNING u logger-u (bez
+tela, ključa i potpisa).
+
+Ni bezbedan zahtev nije potpuno zaštićen: kad se obrada na serveru prekine ili ne uspe
+posle fiskalizacije (pad servera, istek odgovora Poreske uprave), račun postoji, ali ga
+server nije upisao, pa se ne vidi ni u `invoices()->list()` ni u admin panelu, a ponovljen
+zahtev sa istim brojem izdaje drugi račun (vidi „Idempotency“). Kad ishod ostane nepoznat i
+posle poslednjeg pokušaja, sa brojem računa ili bez njega, proverite da li je račun izdat;
+provera nalazi samo upisan račun, pa kad ga ne nađe, pre novog slanja obratite se podršci.
+
+Podrazumevano: početni zahtev + do 3 ponavljanja (`maxRetries: 3`), pauze 1 s / 2 s / 4 s.
+Konfigurisano u `Config`.
 
 Svaki ponovni pokušaj se potpisuje iznova i dobija **strogo veći** `X-Timestamp` od
 prethodnog pokušaja, pa nijedna dva pokušaja nemaju isti potpis: timestamp pokušaja je

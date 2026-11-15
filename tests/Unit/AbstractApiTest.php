@@ -51,6 +51,17 @@ final class AbstractApiTest extends TestCase
             ->addItem(new InvoiceItem(naziv: 'Test', kolicina: 1, jedinicnaCena: 100, pdvStopa: 20));
     }
 
+    /**
+     * Račun sa `broj_racuna`: od 1.2.0 jedini POST koji SDK ponavlja posle
+     * 502/503/504 i mrežne greške nepoznatog ishoda (server ga prepoznaje po
+     * broju). POST bez broja se tada ne ponavlja — vidi
+     * {@see PonavljanjeNeizvesnogIshodaTest}.
+     */
+    private function makeInvoiceSaBrojem(): Invoice
+    {
+        return $this->makeInvoice()->setInvoiceNumber('SHOP-2026-001');
+    }
+
     // --- Uspesni odgovori ---
 
     public function testSuccessfulPost(): void
@@ -221,7 +232,7 @@ final class AbstractApiTest extends TestCase
         $config = new Config('efisk_1_test', 'secret', maxRetries: 2, retryBaseDelayMs: 1);
         $api = new FiskalizacijaApi($config, $mock, $this->signer);
 
-        $result = $api->fiskalizuj($this->makeInvoice());
+        $result = $api->fiskalizuj($this->makeInvoiceSaBrojem());
 
         $this->assertSame('GW-OK', $result->pfrBroj);
     }
@@ -242,7 +253,7 @@ final class AbstractApiTest extends TestCase
         $config = new Config('efisk_1_test', 'secret', maxRetries: 2, retryBaseDelayMs: 1);
         $api = new FiskalizacijaApi($config, $mock, $this->signer);
 
-        $result = $api->fiskalizuj($this->makeInvoice());
+        $result = $api->fiskalizuj($this->makeInvoiceSaBrojem());
 
         $this->assertSame('SVC-OK', $result->pfrBroj);
     }
@@ -263,7 +274,7 @@ final class AbstractApiTest extends TestCase
         $this->expectException(ServerException::class);
         $this->expectExceptionMessage('Service Unavailable');
 
-        $api->fiskalizuj($this->makeInvoice());
+        $api->fiskalizuj($this->makeInvoiceSaBrojem());
     }
 
     public function testNoRetryOn400(): void
@@ -324,7 +335,7 @@ final class AbstractApiTest extends TestCase
         $config = new Config('efisk_1_test', 'secret', maxRetries: 2, retryBaseDelayMs: 1);
         $api = new FiskalizacijaApi($config, $mock, $this->signer);
 
-        $result = $api->fiskalizuj($this->makeInvoice());
+        $result = $api->fiskalizuj($this->makeInvoiceSaBrojem());
 
         $this->assertSame('NET-OK', $result->pfrBroj);
     }
@@ -342,7 +353,7 @@ final class AbstractApiTest extends TestCase
         $this->expectException(NetworkException::class);
         $this->expectExceptionMessage('DNS resolution failed');
 
-        $api->fiskalizuj($this->makeInvoice());
+        $api->fiskalizuj($this->makeInvoiceSaBrojem());
     }
 
     // --- Rate limit sa Retry-After ---

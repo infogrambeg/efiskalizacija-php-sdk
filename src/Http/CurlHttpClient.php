@@ -17,11 +17,19 @@ final class CurlHttpClient implements HttpClientInterface
         $this->connectTimeout = $connectTimeout;
     }
 
+    /**
+     * Zaglavlja (API ključ, potpis) i telo nose `#[\SensitiveParameter]`, pa
+     * ih na PHP ≥ 8.2 trag izuzetka ne sadrži (na 8.1 atribut nema efekta).
+     *
+     * @throws NetworkException sa `wasRequestSent()`: false samo kad cURL nije
+     *         poslao nijedan bajt zahteva (`CURLINFO_REQUEST_SIZE` = 0, npr.
+     *         zatvoren port, nerazrešiv host, neuspeo TLS), inače true
+     */
     public function request(
         string $method,
         string $url,
-        array $headers = [],
-        string $body = '',
+        #[\SensitiveParameter] array $headers = [],
+        #[\SensitiveParameter] string $body = '',
     ): Response {
         $ch = curl_init();
 
@@ -57,10 +65,15 @@ final class CurlHttpClient implements HttpClientInterface
         if ($rawResponse === false) {
             $error = curl_error($ch);
             $errno = curl_errno($ch);
+            // Bajtovi zahteva koje je cURL poslao (zaglavlja + telo). Samo 0
+            // znači da server zahtev nije mogao dobiti; delimično poslat
+            // zahtev se računa kao poslat (server ga je možda obradio).
+            $requestSize = curl_getinfo($ch, CURLINFO_REQUEST_SIZE);
 
             throw new NetworkException(
                 "cURL greska ({$errno}): {$error}",
-                $errno
+                $errno,
+                requestSent: $requestSize !== 0,
             );
         }
 

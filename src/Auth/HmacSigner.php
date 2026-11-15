@@ -45,7 +45,7 @@ final class HmacSigner
      * @param string $body     Request body (prazan string za GET)
      * @param int    $timestamp Unix timestamp
      */
-    public function sign(string $method, string $path, string $body, int $timestamp): string
+    public function sign(string $method, string $path, #[\SensitiveParameter] string $body, int $timestamp): string
     {
         // Server koristi samo path bez query stringa (parse_url PHP_URL_PATH).
         $pathOnly = parse_url($path, PHP_URL_PATH) ?: $path;
@@ -63,10 +63,10 @@ final class HmacSigner
      * @return array<string, string> Asocijativni niz header-a
      */
     public function getAuthHeaders(
-        string $apiKey,
+        #[\SensitiveParameter] string $apiKey,
         string $method,
         string $path,
-        string $body,
+        #[\SensitiveParameter] string $body,
         ?int $timestamp = null,
     ): array {
         $timestamp ??= time();
@@ -88,7 +88,7 @@ final class HmacSigner
      * @param string $body     Request body (prazan string za GET)
      * @param int    $timestamp Unix timestamp
      */
-    public function signV2(string $method, string $target, string $body, int $timestamp): string
+    public function signV2(string $method, string $target, #[\SensitiveParameter] string $body, int $timestamp): string
     {
         $bodyHash = hash('sha256', $body);
         $stringToSign = self::V2_PREFIX . $timestamp . strtoupper($method) . $target . $bodyHash;
@@ -106,10 +106,10 @@ final class HmacSigner
      * @return array<string, string> Asocijativni niz header-a
      */
     public function getAuthHeadersV2(
-        string $apiKey,
+        #[\SensitiveParameter] string $apiKey,
         string $method,
         string $target,
-        string $body,
+        #[\SensitiveParameter] string $body,
         ?int $timestamp = null,
     ): array {
         $timestamp ??= time();

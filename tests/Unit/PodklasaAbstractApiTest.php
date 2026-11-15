@@ -17,7 +17,9 @@ use PHPUnit\Framework\TestCase;
  *
  * Podklasa se deklariše u pod-procesu
  * (`tests/Fixtures/podklasa-tacke-prosirenja.php`): Fatal pri nasleđivanju
- * ubio bi proces testova.
+ * ubio bi proces testova. Pod-proces izvršava i GET koji se ponavlja i
+ * nebezbedan POST posle 503 i posle mrežne greške, pa prolazi svakim
+ * pomoćnikom koji se ovde imenuje — i `warnUnknownOutcome` na obe grane.
  *
  * @trace R1 R2
  */
@@ -29,10 +31,10 @@ final class PodklasaAbstractApiTest extends TestCase
         yield 'private pause()' => ['private pause()'];
         yield 'currentTime(): float' => ['currentTime(): float'];
         yield 'pause(int $sekundi)' => ['pause(int $sekundi)'];
-        // Imena privatnih pomoćnika 1.1.0, drugi potpis, svaka vidljivost:
+        // Imena privatnih pomoćnika 1.1.0 i 1.2.0, drugi potpis, svaka vidljivost:
         // pomoćnik koji bi postao protected/public obara ove oblike (Fatal
         // pri nasleđivanju ili SDK zove metodu podklase).
-        foreach (['sleepFor', 'clockNow', 'nextTimestamp', 'queryString'] as $ime) {
+        foreach (['sleepFor', 'clockNow', 'nextTimestamp', 'queryString', 'isSafeToRepeat', 'warnUnknownOutcome'] as $ime) {
             foreach (['private', 'protected', 'public', 'static'] as $vidljivost) {
                 yield $ime . ' ' . $vidljivost => [$ime . ' ' . $vidljivost];
             }
@@ -56,5 +58,19 @@ final class PodklasaAbstractApiTest extends TestCase
         // Pozitivna kontrola: ponovni pokušaj se desio i dobio strogo veći timestamp
         self::assertCount(2, $r['vremena']);
         self::assertGreaterThan((int) $r['vremena'][0], (int) $r['vremena'][1]);
+        // Pozitivna kontrola: POST bez broja posle 503 je prošao kroz
+        // `warnUnknownOutcome` (WARNING o nepoznatom ishodu) i nije ponovljen
+        self::assertSame(1, $r['postova'], 'POST bez broja ide tačno jednom');
+        self::assertSame(\Efiskalizacija\Exception\ServerException::class, $r['izuzetak_posta']);
+        // Pozitivna kontrola mrežne grane: POST bez broja posle
+        // `NetworkException` (requestSent null) takođe prolazi kroz
+        // `warnUnknownOutcome` i nije ponovljen
+        self::assertSame(1, $r['mreznih'], 'POST bez broja posle mrežne greške ide tačno jednom');
+        self::assertSame(\Efiskalizacija\Exception\NetworkException::class, $r['izuzetak_mreznog']);
+        self::assertCount(
+            2,
+            array_filter($r['upozorenja'], static fn (string $p): bool => str_contains($p, 'nije poznat')),
+            'WARNING o nepoznatom ishodu: grana statusa i mrežna grana',
+        );
     }
 }

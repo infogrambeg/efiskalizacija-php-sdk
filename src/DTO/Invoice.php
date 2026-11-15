@@ -124,8 +124,18 @@ final class Invoice
     }
 
     /**
-     * Idempotency key sprecava duplu fiskalizaciju.
-     * Preporuceni format: "wc:{site_hash}:{order_id}"
+     * Lokalna oznaka računa; ne šalje se serveru i NE štiti od duplog računa.
+     *
+     * Zaštita od duplog fiskalnog računa je {@see self::setInvoiceNumber()}
+     * (polje `broj_racuna`): server prepoznaje već upisan račun sa istim
+     * brojem i vraća ga umesto novog, a SDK samo takav POST sme sam da ponovi
+     * kad ishod zahteva nije poznat. Prozor ostaje kad se obrada na serveru
+     * prekine ili ne uspe posle fiskalizacije (pad servera, istek odgovora
+     * Poreske uprave): server tada račun nije upisao, pa ponovljen zahtev sa
+     * istim brojem izdaje drugi račun.
+     *
+     * @deprecated od 1.2.0 — koristite setInvoiceNumber(); vrednost se i dalje
+     *             čuva (i vraća {@see self::getIdempotencyKey()}), ali se ne šalje.
      */
     public function setIdempotencyKey(string $key): self
     {
@@ -133,6 +143,13 @@ final class Invoice
         return $this;
     }
 
+    /**
+     * Vrednost zadata kroz {@see self::setIdempotencyKey()}; ne šalje se
+     * serveru.
+     *
+     * @deprecated od 1.2.0 — zaštita od duplog računa je setInvoiceNumber()
+     *             (`broj_racuna`).
+     */
     public function getIdempotencyKey(): ?string
     {
         return $this->idempotencyKey;

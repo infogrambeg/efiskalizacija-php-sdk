@@ -15,7 +15,7 @@ final class EmailApi extends AbstractApi
      *
      * @throws \Efiskalizacija\Exception\EfiskalizacijaException
      */
-    public function send(string $pfrBroj, string $email): array
+    public function send(#[\SensitiveParameter] string $pfrBroj, #[\SensitiveParameter] string $email): array
     {
         $response = $this->post('/send-email', [
             'pfr' => $pfrBroj,
