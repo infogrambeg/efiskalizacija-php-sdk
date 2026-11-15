@@ -15,6 +15,12 @@ final class Config
     public const DEFAULT_RETRY_BASE_DELAY_MS = 1000;
     public const DEFAULT_RETRY_MULTIPLIER = 2;
 
+    /** Najveći dozvoljen `maxRetries` (broj PONOVLJENIH pokušaja). */
+    public const MAX_RETRIES = 10;
+
+    /** Gornja granica pauze između dva pokušaja (ms). */
+    public const MAX_RETRY_DELAY_MS = 60000;
+
     private string $apiKey;
     private string $apiSecret;
     private string $baseUrl;
@@ -25,8 +31,8 @@ final class Config
     private int $retryMultiplier;
 
     public function __construct(
-        string $apiKey,
-        string $apiSecret,
+        #[\SensitiveParameter] string $apiKey,
+        #[\SensitiveParameter] string $apiSecret,
         string $baseUrl = self::BASE_URL_PRODUCTION,
         int $timeout = self::DEFAULT_TIMEOUT,
         int $connectTimeout = self::DEFAULT_CONNECT_TIMEOUT,
@@ -40,6 +46,21 @@ final class Config
         if ($apiSecret === '') {
             throw new \InvalidArgumentException('API secret ne sme biti prazan');
         }
+        if ($maxRetries < 0 || $maxRetries > self::MAX_RETRIES) {
+            throw new \InvalidArgumentException(
+                'maxRetries mora biti izmedju 0 i ' . self::MAX_RETRIES . ", zadato {$maxRetries}"
+            );
+        }
+        if ($retryBaseDelayMs < 0) {
+            throw new \InvalidArgumentException(
+                "retryBaseDelayMs ne sme biti negativan, zadato {$retryBaseDelayMs}"
+            );
+        }
+        if ($retryMultiplier < 1) {
+            throw new \InvalidArgumentException(
+                "retryMultiplier mora biti najmanje 1, zadato {$retryMultiplier}"
+            );
+        }
 
         $this->apiKey = $apiKey;
         $this->apiSecret = $apiSecret;
@@ -51,13 +72,17 @@ final class Config
         $this->retryMultiplier = $retryMultiplier;
     }
 
-    public static function sandbox(string $apiKey, string $apiSecret): self
-    {
+    public static function sandbox(
+        #[\SensitiveParameter] string $apiKey,
+        #[\SensitiveParameter] string $apiSecret,
+    ): self {
         return new self($apiKey, $apiSecret, self::BASE_URL_SANDBOX);
     }
 
-    public static function production(string $apiKey, string $apiSecret): self
-    {
+    public static function production(
+        #[\SensitiveParameter] string $apiKey,
+        #[\SensitiveParameter] string $apiSecret,
+    ): self {
         return new self($apiKey, $apiSecret, self::BASE_URL_PRODUCTION);
     }
 

@@ -57,7 +57,6 @@ final class CurlHttpClient implements HttpClientInterface
         if ($rawResponse === false) {
             $error = curl_error($ch);
             $errno = curl_errno($ch);
-            curl_close($ch);
 
             throw new NetworkException(
                 "cURL greska ({$errno}): {$error}",
@@ -67,7 +66,6 @@ final class CurlHttpClient implements HttpClientInterface
 
         $statusCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $headerSize = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-        curl_close($ch);
 
         /** @var string $rawResponse */
         $rawHeaders = substr($rawResponse, 0, $headerSize);

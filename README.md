@@ -14,8 +14,8 @@ PHP SDK za [eFiskalizacija.cloud](https://efiskalizacija.cloud) - fiskalizacija 
 composer require infogrambeg/efiskalizacija-php-sdk:^1.1
 ```
 
-Trenutna verzija: **1.1.0** (potpis zahteva v2, vidi „Potpis zahteva (HMAC v2)“). Verzija
-1.1.0 zahteva server sa podrškom za potpis v2 — `efiskalizacija.cloud` i
+Trenutna verzija: **1.1.1** (potpis zahteva v2 od 1.1.0, vidi „Potpis zahteva (HMAC v2)“).
+Verzija 1.1.0 i novije zahtevaju server sa podrškom za potpis v2 — `efiskalizacija.cloud` i
 `staging.efiskalizacija.cloud` je imaju od 2026-11-13.
 
 ## Brzi početak
@@ -257,6 +257,36 @@ neizmenjen.
   query-jem, pa takav GET dobija `401`. Server i dalje prima v1 na fiskalnim rutama, ali za
   nove integracije koristite 1.1.0 ili noviju.
 
+### Promene u 1.1.1
+
+- `CurlHttpClient` više ne poziva `curl_close()` (od PHP 8.0 nema efekta), pa na PHP 8.5
+  zahtev ne daje E_DEPRECATED „Function curl_close() is deprecated“.
+- `Config` proverava konfiguraciju ponavljanja i baca `InvalidArgumentException` van
+  opsega: `maxRetries` mora biti 0–10 (`Config::MAX_RETRIES`), `retryBaseDelayMs` ≥ 0,
+  `retryMultiplier` ≥ 1. Podrazumevane vrednosti (3, 1000, 2) su u opsegu.
+- Pauza između pokušaja je najviše 60 s (`Config::MAX_RETRY_DELAY_MS` = 60000 ms) i
+  računa se bez prelivanja celog broja (ranije su vrlo velike vrednosti davale
+  `TypeError`). Podrazumevane pauze su iste: 1 s, 2 s, 4 s.
+- `Config` napravljen kroz `unserialize()` (konstruktor se ne poziva, npr. objekat
+  sačuvan sa 1.1.0) sa `maxRetries` > 10 radi najviše 10 ponovljenih pokušaja. Sa
+  negativnim `maxRetries` poziv baca `InvalidArgumentException` pre slanja (nijedan
+  zahtev ne odlazi na server). Za takav objekat sa `retryBaseDelayMs` < 0 pauza je 0,
+  a sa `retryMultiplier` < 1 svaka pauza je jednaka bazi (najviše 60 s).
+- API ključ i tajna u `Config::__construct`, `Config::sandbox`, `Config::production`,
+  `EfiskalizacijaClient::create`, `EfiskalizacijaClient::sandbox` i
+  `HmacSigner::__construct` nose `#[\SensitiveParameter]`. To važi samo za
+  trag izuzetka iz `Config`-a i fabrika: na PHP ≥ 8.2 taj trag (`getTrace()`,
+  `(string) $e`) ne sadrži njihove vrednosti. Na PHP 8.1 atribut nema efekta — tamo
+  uključite `zend.exception_ignore_args=On` ili ne prosleđujte trag izuzetka iz
+  `Config`-a sistemu za praćenje grešaka. Atribut NE štiti izuzetke iz slanja zahteva:
+  `NetworkException::getTrace()` nosi zaglavlja zahteva (`X-API-Key`, `X-Signature`)
+  kao argument metode `request()` HTTP klijenta na svakoj verziji PHP-a, osim uz
+  `zend.exception_ignore_args=On`. Posledica na PHP ≥ 8.2, samo uz
+  `zend.exception_ignore_args=0` (inače trag nema argumente): `serialize()` izuzetka iz
+  `Config`-a ili fabrika baca
+  „Serialization of 'SensitiveParameterValue' is not allowed“.
+- Potpis zahteva (v2) i potpisi javnih metoda su bez promene.
+
 ### Promene u 1.1.0
 
 - Svaki zahtev SDK klijenta potpisuje se v2 (cilj sa query stringom) i nosi
@@ -285,6 +315,10 @@ ovim slučajevima:
   `signV2()` ne.
 - **Sopstveni `HttpClientInterface`**: mora poslati `$url` bez prepakivanja (vidi gore).
 - **Bazni URL sa putanjom**: vidi gore.
+- **`Config` sa granicama ponavljanja van opsega**: `Config` sa
+  `maxRetries` van 0–10, `retryBaseDelayMs` < 0 ili `retryMultiplier` < 1
+  baca `InvalidArgumentException` pri konstrukciji od 1.1.1 (ranije je prihvatan). Od 1.1.1 je i pauza između pokušaja najviše 60 s
+  (`Config::MAX_RETRY_DELAY_MS`), pa konfiguracija sa dužim pauzama čeka kraće.
 
 Povratak na `1.0.2` (`composer require infogrambeg/efiskalizacija-php-sdk:1.0.2`) radi,
 jer server i dalje prima potpis v1. Objekat koji je serijalizovala 1.1.0, a deserijalizuje
@@ -316,9 +350,11 @@ najviše za k sekundi, gde je k broj ponovljenih pokušaja do tog trenutka (najv
 timestamp ±300 s od svog sata, pa sat servera i klijenta treba da budu sinhronizovani
 (NTP).
 
-Granica: `maxRetries` nije ograničen, a pomak raste do k = `maxRetries` sekundi. Uz razmak
-0 (svi pokušaji u istoj sekundi) timestamp izlazi iz tolerancije servera od ~302. pokušaja,
-pa `maxRetries` treba da bude daleko ispod 300 (podrazumevano 3).
+Granica: od 1.1.1 `maxRetries` je najviše 10 (`Config::MAX_RETRIES`). Za `Config`
+dobijen kroz `unserialize()` (bez konstruktora) `maxRetries` > 10 se ograničava na 10, a
+negativan baca `InvalidArgumentException` pre slanja. Zato je timestamp ispred sata
+najviše 10 s (uz skok sata unazad J + 10), daleko unutar tolerancije servera.
+Pauza između pokušaja je najviše 60 s (`Config::MAX_RETRY_DELAY_MS`).
 
 ## Webhook
 
@@ -416,9 +452,9 @@ $config = new Config(
     baseUrl: 'https://efiskalizacija.cloud',  // default
     timeout: 30,              // HTTP timeout (sekunde)
     connectTimeout: 10,       // Connection timeout (sekunde)
-    maxRetries: 3,            // Broj retry pokušaja
-    retryBaseDelayMs: 1000,   // Početni delay (ms)
-    retryMultiplier: 2,       // Multiplier za exponential backoff
+    maxRetries: 3,            // Broj retry pokušaja (0–10)
+    retryBaseDelayMs: 1000,   // Početni delay (ms, ≥ 0; pauza najviše 60 s)
+    retryMultiplier: 2,       // Multiplier za exponential backoff (≥ 1)
 );
 
 $client = new EfiskalizacijaClient($config);

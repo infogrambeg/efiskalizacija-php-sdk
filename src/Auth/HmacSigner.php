@@ -32,7 +32,7 @@ final class HmacSigner
 
     private string $apiSecret;
 
-    public function __construct(string $apiSecret)
+    public function __construct(#[\SensitiveParameter] string $apiSecret)
     {
         $this->apiSecret = $apiSecret;
     }

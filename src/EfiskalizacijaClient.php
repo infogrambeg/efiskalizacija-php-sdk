@@ -57,8 +57,8 @@ final class EfiskalizacijaClient
      * Brzo kreiranje klijenta.
      */
     public static function create(
-        string $apiKey,
-        string $apiSecret,
+        #[\SensitiveParameter] string $apiKey,
+        #[\SensitiveParameter] string $apiSecret,
         ?LoggerInterface $logger = null,
     ): self {
         return new self(
@@ -71,8 +71,8 @@ final class EfiskalizacijaClient
      * Kreiranje sandbox klijenta za testiranje.
      */
     public static function sandbox(
-        string $apiKey,
-        string $apiSecret,
+        #[\SensitiveParameter] string $apiKey,
+        #[\SensitiveParameter] string $apiSecret,
         ?LoggerInterface $logger = null,
     ): self {
         return new self(

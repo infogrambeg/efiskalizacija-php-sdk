@@ -144,7 +144,18 @@ abstract class AbstractApi
 
     private function requestRawWithRetry(string $method, string $path, string $body): Response
     {
-        $maxAttempts = $this->config->getMaxRetries() + 1;
+        // Granica važi i za Config koji nije prošao konstruktor (npr.
+        // `unserialize()` objekta iz 1.1.0): najviše 1 + MAX_RETRIES zahteva.
+        // Negativna vrednost je fail-closed: izuzetak pre prvog zahteva, sa
+        // istom porukom koju daje konstruktor Config-a.
+        $configuredRetries = $this->config->getMaxRetries();
+        if ($configuredRetries < 0) {
+            throw new \InvalidArgumentException(
+                'maxRetries mora biti izmedju 0 i ' . Config::MAX_RETRIES . ", zadato {$configuredRetries}"
+            );
+        }
+        $retries = min($configuredRetries, Config::MAX_RETRIES);
+        $maxAttempts = $retries + 1;
         $lastException = null;
         $lastTimestamp = null;
 
@@ -223,10 +234,34 @@ abstract class AbstractApi
         // @codeCoverageIgnoreEnd
     }
 
+    /**
+     * Pauza (ms) posle neuspelog pokušaja $attempt:
+     * min(base × multiplier^(attempt−1), `Config::MAX_RETRY_DELAY_MS`).
+     *
+     * Računa se množenjem u petlji uz proveru PRE svakog množenja
+     * (multiplier > granica / pauza), pa proizvod nikad ne prelazi granicu i
+     * ne preliva se u float — za bilo koje int vrednosti, i one koje `Config`
+     * ne dozvoljava (npr. objekat iz `unserialize()`): negativna baza daje 0,
+     * multiplier < 1 drži pauzu na bazi.
+     */
     private function calculateDelay(int $attempt): int
     {
-        return $this->config->getRetryBaseDelayMs()
-            * ($this->config->getRetryMultiplier() ** ($attempt - 1));
+        $max = Config::MAX_RETRY_DELAY_MS;
+        $delay = min(max($this->config->getRetryBaseDelayMs(), 0), $max);
+        $multiplier = $this->config->getRetryMultiplier();
+
+        if ($delay === 0 || $multiplier <= 1) {
+            return $delay;
+        }
+
+        for ($i = 1; $i < $attempt; $i++) {
+            if ($multiplier > intdiv($max, $delay)) {
+                return $max;
+            }
+            $delay *= $multiplier;
+        }
+
+        return $delay;
     }
 
     /**
@@ -240,10 +275,11 @@ abstract class AbstractApi
      * sat tokom poziva skoči unazad za J sekundi, za J + k. Server prihvata
      * timestamp ±300 s od SVOG sata.
      *
-     * Granica: `maxRetries` nije ograničen, a pomak raste do k = `maxRetries`.
-     * Uz razmak 0 (pokušaji u istoj sekundi) timestamp izlazi iz tolerancije
-     * servera od ~302. pokušaja, pa `maxRetries` treba da bude daleko ispod
-     * 300 (podrazumevano 3).
+     * Granica: `Config` dozvoljava `maxRetries` najviše `Config::MAX_RETRIES`
+     * (10), a `requestRawWithRetry()` broj ponovljenih pokušaja ograničava na
+     * isti opseg i za Config koji nije prošao konstruktor (`unserialize()`),
+     * pa je pomak ispred sata uvek najviše 10 s (uz skok sata unazad J + 10),
+     * daleko unutar tolerancije servera.
      */
     private function nextTimestamp(?int $previous): int
     {
