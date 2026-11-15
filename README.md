@@ -11,10 +11,10 @@ PHP SDK za [eFiskalizacija.cloud](https://efiskalizacija.cloud) - fiskalizacija 
 ## Instalacija
 
 ```bash
-composer require infogrambeg/efiskalizacija-php-sdk:^1.1
+composer require infogrambeg/efiskalizacija-php-sdk:^1.2
 ```
 
-Trenutna verzija: **1.1.1** (potpis zahteva v2 od 1.1.0, vidi „Potpis zahteva (HMAC v2)“).
+Trenutna verzija: **1.2.0** (potpis zahteva v2 od 1.1.0, vidi „Potpis zahteva (HMAC v2)“).
 Verzija 1.1.0 i novije zahtevaju server sa podrškom za potpis v2 — `efiskalizacija.cloud` i
 `staging.efiskalizacija.cloud` je imaju od 2026-11-13.
 
@@ -47,10 +47,28 @@ $invoice = Invoice::create()
 // Fiskalizacija
 $result = $client->fiskalizacija()->fiskalizuj($invoice);
 
-echo $result->pfrBroj;   // "AB12CD34-Ef5Gh6i7-101"
-echo $result->qrCode;    // URL za QR verifikaciju
-echo $result->racunId;   // ID u sistemu
+if (!$result->isSuccess()) {
+    // Neuspeh koji server vrati kao rezultat ne baca izuzetak
+    echo $result->poruka;    // razlog (npr. odgovor Poreske uprave)
+    echo $result->errorCode; // šifra greške ili null (vidi ispod)
+    return;
+}
+
+echo $result->pfrBroj;        // "AB12CD34-Ef5Gh6i7-101"
+echo $result->qrUrl;          // adresa za proveru računa na portalu Poreske uprave
+echo $result->qrCode;         // QR kod kao base64 PNG
+echo $result->racunId;        // ID u sistemu
+echo $result->klijentskiBroj; // "SHOP-2026-001" (broj iz setInvoiceNumber())
+var_dump($result->duplikat);  // true: vraćen već izdat račun sa istim brojem
 ```
+
+Rezultat (`FiskalizacijaResult`) nosi i `success`, `status`, `brojRacuna` (broj koji je
+dodelio sistem), `ukupanIznos`, `pfrDatumVreme`, `esirOznaka`, `errorCode` i
+`existingCopyInvoiceId`. `errorCode` (`copy_already_issued` / `copy_in_progress`) i
+`existingCopyInvoiceId` (uz `copy_already_issued`) server popunjava samo za kopiju računa
+poslatu sa `tip_racuna: "copy"` i `original_broj_racuna`, a SDK takav zahtev trenutno ne
+šalje (`InvoiceType::Kopija` šalje `kopija`), pa su kroz SDK `null`. `duplikat` je `null`
+kad zahtev nije nosio broj računa. Izuzetak se baca samo za HTTP grešku (vidi „Error handling“).
 
 ## API Metode
 
@@ -174,6 +192,12 @@ $avans = Invoice::create()
     ->setCustomer(Customer::pravnoLice('123456789'))
     ->addItem(new InvoiceItem(naziv: 'Avans', kolicina: 1, jedinicnaCena: 50000, pdvStopa: 20));
 
+$avansResult = $client->fiskalizacija()->fiskalizuj($avans);
+if (!$avansResult->isSuccess()) {
+    // Bez fiskalizovanog avansa nema reference za sledeći korak: stanite
+    throw new RuntimeException('Avans nije fiskalizovan: ' . $avansResult->poruka);
+}
+
 // 2. Avans refundacija (referenca na poslednji avans)
 $refund = Invoice::create()
     ->setInvoiceType(InvoiceType::Avans)
@@ -183,13 +207,27 @@ $refund = Invoice::create()
     ->setCustomer(Customer::pravnoLice('123456789'))
     ->addItem(new InvoiceItem(naziv: 'Refundacija avansa', kolicina: 1, jedinicnaCena: 50000, pdvStopa: 20));
 
+$refundResult = $client->fiskalizacija()->fiskalizuj($refund);
+if (!$refundResult->isSuccess()) {
+    throw new RuntimeException('Refundacija avansa nije fiskalizovana: ' . $refundResult->poruka);
+}
+
 // 3. Konačni račun (referenca na avans refundaciju)
 $final = Invoice::create()
     ->setReferentDocument($refundResult->pfrBroj)
     ->setPaymentType(PaymentType::Kartica)
     ->setCustomer(Customer::pravnoLice('123456789'))
     ->addItem(new InvoiceItem(naziv: 'Laptop Dell XPS', kolicina: 1, jedinicnaCena: 250000, pdvStopa: 20));
+
+$finalResult = $client->fiskalizacija()->fiskalizuj($final);
+if (!$finalResult->isSuccess()) {
+    throw new RuntimeException('Konačni račun nije fiskalizovan: ' . $finalResult->poruka);
+}
 ```
+
+Neuspeh fiskalizacije nije izuzetak (vidi „Brzi početak“), pa posle svakog koraka proverite
+`isSuccess()` i stanite pre sledećeg `setReferentDocument()`: neuspeo korak ima prazan
+`pfrBroj`, pa sledeći račun ne bi imao ispravnu referencu.
 
 ## Idempotency
 
@@ -279,7 +317,25 @@ neizmenjen.
   query-jem, pa takav GET dobija `401`. Server i dalje prima v1 na fiskalnim rutama, ali za
   nove integracije koristite 1.1.0 ili noviju.
 
-### Promene u 1.2.0 (neobjavljeno)
+### Promene u 1.2.0
+
+- **Rezultat fiskalizacije po stvarnim poljima servera.** `FiskalizacijaResult::fromArray()`
+  čita `qr_kod` (rezervno `qr_code`) i `message` (rezervno `poruka`): do 1.1.1 su `qrCode` i
+  `poruka` uvek bili `null`. Nova svojstva (na kraju konstruktora, sa podrazumevanom
+  vrednošću `null`): `success`, `status`, `brojRacuna`, `klijentskiBroj`, `duplikat`,
+  `ukupanIznos`, `pfrDatumVreme`, `qrUrl`, `esirOznaka`, `errorCode`,
+  `existingCopyInvoiceId`, i metoda `isSuccess()`. Neuspeh koji server vrati kao rezultat
+  (`success: false`) i dalje je rezultat, ne izuzetak. Vrednost u neočekivanom tipu (npr.
+  broj kao tekst) prevodi se kad je to jednoznačno, a inače je `null`.
+- **Webhook po stvarnom telu.** `WebhookPayload::fromArray()` čita polja iz `data`
+  (`invoice_id` → `racunId`, `pfr_broj`, `ukupan_iznos` → `iznos`), uz rezervu na stare
+  ključeve sa vrha. Nova svojstva: `klijentskiBroj`, `brojRacuna` (`invoice_number`),
+  `success`, `datumIzdavanja`, `errorMessage`, `timestamp`. `status` je izveden iz
+  `success` (`success` / `error`) kad ga telo ne nosi. `isFiscalized()` i `isFailed()`
+  su bez promene.
+- **`Invoice::setAdvertisementText()`** šalje `reklamni_tekst`: server ga čuva i štampa na
+  računu. `Invoice::setNote()` je `@deprecated` (korensko `napomena` se ne čuva uz račun); šalje
+  se kao do sada.
 
 - **Ponavljanje zahteva čiji ishod nije poznat.** SDK sam ponavlja samo zahtev bezbedan
   za ponavljanje: GET i `POST /fiskalizacija` čije telo nosi `broj_racuna` koji posle
@@ -312,8 +368,16 @@ neizmenjen.
   `HttpClientInterface` atribut ne nasleđuje — dodajte ga na svoje parametre.
 - `Invoice::setIdempotencyKey()` / `getIdempotencyKey()` su `@deprecated`: ključ se ni
   ranije nije slao serveru. Zaštita od duplog računa je `setInvoiceNumber()`.
-- Potpis zahteva (v2) je bez promene. Potpisi javnih metoda su isti, osim što konstruktor
-  `NetworkException` ima nov opcioni parametar `requestSent` (vidi gore).
+- Potpis zahteva (v2) je bez promene. Potpisi postojećih javnih metoda su isti, osim
+  konstruktora koji su dobili nove opcione parametre na kraju (podrazumevano `null`, pa
+  postojeći pozivi rade bez izmene): `NetworkException` (`requestSent`, vidi gore),
+  `FiskalizacijaResult` (`success`, `status`, `brojRacuna`, `klijentskiBroj`, `duplikat`,
+  `ukupanIznos`, `pfrDatumVreme`, `qrUrl`, `esirOznaka`, `errorCode`,
+  `existingCopyInvoiceId`) i `WebhookPayload` (`klijentskiBroj`, `brojRacuna`, `success`,
+  `datumIzdavanja`, `errorMessage`, `timestamp`). Nove metode su
+  `FiskalizacijaResult::isSuccess()`, `Invoice::setAdvertisementText()`,
+  `FiskalizacijaResult::__unserialize()` i `WebhookPayload::__unserialize()` (vidi
+  „Nadogradnja na 1.2.0“).
 
 ### Promene u 1.1.1
 
@@ -361,8 +425,9 @@ neizmenjen.
 
 ### Nadogradnja na 1.2.0
 
-Za fiskalizaciju **sa** brojem računa (`setInvoiceNumber()`) i za GET metode ponašanje je
-isto kao u 1.1.1. Izmene mogu trebati u ovim slučajevima:
+Za fiskalizaciju **sa** brojem računa (`setInvoiceNumber()`) i za GET metode ponavljanje
+zahteva je isto kao u 1.1.1; rezultat i webhook sada nose polja koja su ranije bila `null`
+(vidi „Promene u 1.2.0“). Izmene mogu trebati u ovim slučajevima:
 
 - **`fiskalizuj()` bez broja računa, `email()->send()`, `test()->run()`**: posle prekida
   veze, 502, 503 ili 504 dobijate izuzetak posle prvog pokušaja. Pre novog slanja proverite da
@@ -372,6 +437,26 @@ isto kao u 1.1.1. Izmene mogu trebati u ovim slučajevima:
   `requestSent: false` samo kad je sigurno da nijedan bajt zahteva nije poslat.
 - **Kod koji koristi `setIdempotencyKey()`** radi i dalje (zastarelo upozorenje samo u
   alatima za statičku analizu); dodajte `setInvoiceNumber()`.
+- **Kod koji čita `$result->qrCode` ili `$result->poruka`**: do 1.1.1 su uvek bili `null`,
+  sada nose vrednost (`qrCode` je QR kod kao base64 PNG, ne adresa — adresa za proveru je
+  `qrUrl`). Grana koja je očekivala `null` sada dobija vrednost.
+- **Kod koji proverava ishod preko `pfrBroj`**: koristite `isSuccess()`; za neuspeh je
+  `pfrBroj` i dalje prazan string.
+- **Webhook handler**: `pfrBroj`, `racunId` i `iznos` su do 1.1.1 za telo servera bili
+  `null` (polja su u `data`); sada nose vrednost. Porudžbinu povežite po `klijentskiBroj`.
+- **`setNote()`**: tekst se ne čuva uz račun (ne vidi se na računu, u listi računa ni u
+  admin panelu). Za tekst na računu koristite
+  `setAdvertisementText()` — štampa se na računu, pa ne šaljite interne beleške.
+- **`FiskalizacijaResult` ili `WebhookPayload` sačuvan kroz `serialize()`** (keš, red
+  poruka, sesija) sa 1.1.1 ili starijom verzijom: `unserialize()` sa 1.2.0 radi, sačuvana
+  svojstva zadržavaju vrednost, a nova (`success`, `duplikat`, `klijentskiBroj`…) su `null`.
+  `isSuccess()` za takav rezultat odlučuje po `pfrBroj`.
+
+Povratak na 1.1.x (`composer require infogrambeg/efiskalizacija-php-sdk:1.1.1`) radi:
+objekat koji je serijalizovala 1.2.0, a deserijalizuje ga 1.1.x, zadržava vrednosti
+svojstava koja postoje u 1.1.x. Na PHP ≥ 8.2 svako svojstvo dodato u 1.2.0 pri tome daje
+E_DEPRECATED „Creation of dynamic property“ (11 kod `FiskalizacijaResult`, 6 kod
+`WebhookPayload`); vrednosti se čitaju normalno.
 
 ### Nadogradnja sa 1.0.x
 
@@ -464,14 +549,22 @@ use Efiskalizacija\Webhook\WebhookPayload;
 $payload = WebhookPayload::fromJson(file_get_contents('php://input'));
 
 if ($payload->isFiscalized()) {
-    // Račun uspešno fiskalizovan
+    // Račun uspešno fiskalizovan; porudžbinu povežite po broju iz setInvoiceNumber()
+    $porudzbina = $payload->klijentskiBroj; // null kad račun nije poslat sa brojem
     $pfr = $payload->pfrBroj;
+    $iznos = $payload->iznos;
 }
 
 if ($payload->isFailed()) {
     // Fiskalizacija neuspešna
+    $razlog = $payload->errorMessage;
 }
 ```
+
+Server šalje polja računa u `data` (`invoice_id`, `invoice_number`, `klijentski_broj`,
+`success`, `pfr_broj`, `ukupan_iznos`, `datum_izdavanja`, `error_message`); SDK ih čita u
+`racunId`, `brojRacuna`, `klijentskiBroj`, `success`, `pfrBroj`, `iznos`, `datumIzdavanja`
+i `errorMessage`. Detalji računa (`stavke`, `kupac`, `nacin_placanja` …) su u `rawData`.
 
 ## Custom HTTP klijent
 

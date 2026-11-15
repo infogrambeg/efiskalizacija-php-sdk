@@ -11,7 +11,7 @@ use Efiskalizacija\DTO\InvoiceItem;
 use PHPUnit\Framework\TestCase;
 
 /**
- * README i docblock-ovi prate pravilo ponavljanja iz 1.2.0 (neobjavljeno):
+ * README i docblock-ovi prate pravilo ponavljanja iz 1.2.0:
  * zaštita od duplog računa je `broj_racuna` (`setInvoiceNumber()`),
  * `setIdempotencyKey()` je zastareo i ne šalje se, a tabela ponavljanja u
  * README je izvedena iz konstanti `AbstractApi` (promena konstante bez
@@ -88,16 +88,16 @@ final class Verzija120DokumentacijaTest extends TestCase
     }
 
     /** @trace R6 */
-    public function testOdeljakPromenaU120JeIznad111INeobjavljen(): void
+    public function testOdeljakPromenaU120JeIznad111IObjavljen(): void
     {
         $readme = self::fajl('README.md');
-        $novi = strpos($readme, "### Promene u 1.2.0 (neobjavljeno)\n");
+        $novi = strpos($readme, "### Promene u 1.2.0\n");
         $stari = strpos($readme, "### Promene u 1.1.1\n");
-        self::assertNotFalse($novi, 'odeljak „Promene u 1.2.0 (neobjavljeno)"');
+        self::assertNotFalse($novi, 'odeljak „Promene u 1.2.0"');
         self::assertNotFalse($stari);
         self::assertLessThan($stari, $novi);
-        // Objavljena verzija ostaje 1.1.1 dok se 1.2.0 ne objavi
-        self::assertStringContainsString('Trenutna verzija: **1.1.1**', $readme);
+        // Izdanje 1.2.0: trenutna verzija u README
+        self::assertStringContainsString('Trenutna verzija: **1.2.0**', $readme);
 
         $odeljak = substr($readme, $novi, $stari - $novi);
         foreach (['`broj_racuna`', '502', '504', 'wasRequestSent()', '#[\SensitiveParameter]', 'CurlHttpClient', '`@deprecated`', 'WARNING'] as $deo) {
@@ -238,7 +238,7 @@ final class Verzija120DokumentacijaTest extends TestCase
 
         $odeljci = [
             'Idempotency' => self::odeljak("## Idempotency\n", "\n## Error handling\n"),
-            'Promene u 1.2.0' => self::odeljak("### Promene u 1.2.0 (neobjavljeno)\n", "\n### Promene u 1.1.1\n"),
+            'Promene u 1.2.0' => self::odeljak("### Promene u 1.2.0\n", "\n### Promene u 1.1.1\n"),
             'Nadogradnja na 1.2.0' => self::odeljak("### Nadogradnja na 1.2.0\n", "\n### Nadogradnja sa 1.0.x\n"),
         ];
         foreach ($odeljci as $naslov => $odeljak) {
@@ -378,7 +378,7 @@ final class Verzija120DokumentacijaTest extends TestCase
                 ['već upisan račun sa istim brojem', ...$prozor, ...$nevidljiv, ...$provera, 'proverite'],
             ],
             'README Promene u 1.2.0' => [
-                self::spojeno(self::odeljak("### Promene u 1.2.0 (neobjavljeno)\n", "\n### Promene u 1.1.1\n")),
+                self::spojeno(self::odeljak("### Promene u 1.2.0\n", "\n### Promene u 1.1.1\n")),
                 ['već upisan račun sa istim brojem', ...$prozor],
             ],
             'README Retry logika' => [

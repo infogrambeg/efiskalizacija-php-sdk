@@ -24,6 +24,7 @@ final class Invoice
     private ?Customer $kupac = null;
     private ?string $referentniDokument = null;
     private ?string $napomena = null;
+    private ?string $reklamniTekst = null;
     private ?string $idempotencyKey = null;
 
     private function __construct()
@@ -117,9 +118,28 @@ final class Invoice
         return $this;
     }
 
+    /**
+     * Šalje korensko polje `napomena`, koje se ne čuva uz račun: ne vidi se
+     * na računu, u listi računa ni u admin panelu.
+     *
+     * @deprecated od 1.2.0 — za tekst na računu koristite
+     *             setAdvertisementText() (`reklamni_tekst`); vrednost se i
+     *             dalje šalje kao do sada, ali se ne čuva uz račun.
+     */
     public function setNote(string $napomena): self
     {
         $this->napomena = $napomena;
+        return $this;
+    }
+
+    /**
+     * Reklamni tekst računa (polje `reklamni_tekst`): server ga čuva i
+     * štampa na računu (PDF, odeljak „Napomena“). Ne šaljite interne
+     * beleške — vidi ih kupac.
+     */
+    public function setAdvertisementText(string $tekst): self
+    {
+        $this->reklamniTekst = $tekst;
         return $this;
     }
 
@@ -201,6 +221,9 @@ final class Invoice
         }
         if ($this->napomena !== null) {
             $data['napomena'] = $this->napomena;
+        }
+        if ($this->reklamniTekst !== null) {
+            $data['reklamni_tekst'] = $this->reklamniTekst;
         }
 
         return $data;

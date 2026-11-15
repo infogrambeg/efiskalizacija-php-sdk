@@ -26,7 +26,7 @@ final class Verzija111DokumentacijaTest extends TestCase
     {
         $readme = self::fajl('README.md');
 
-        self::assertStringContainsString('Trenutna verzija: **1.1.1**', $readme);
+        // Trenutnu verziju (posle 1.1.1) čuva Verzija120IzdanjeTest
         self::assertStringNotContainsString('Trenutna verzija: **1.1.0**', $readme);
         self::assertStringContainsString('zahtevaju server sa podrškom za potpis v2', $readme);
     }
