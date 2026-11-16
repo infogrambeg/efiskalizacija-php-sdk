@@ -66,8 +66,9 @@ Rezultat (`FiskalizacijaResult`) nosi i `success`, `status`, `brojRacuna` (broj 
 dodelio sistem), `ukupanIznos`, `pfrDatumVreme`, `esirOznaka`, `errorCode` i
 `existingCopyInvoiceId`. `errorCode` (`copy_already_issued` / `copy_in_progress`) i
 `existingCopyInvoiceId` (uz `copy_already_issued`) server popunjava samo za kopiju računa
-poslatu sa `tip_racuna: "copy"` i `original_broj_racuna`, a SDK takav zahtev trenutno ne
-šalje (`InvoiceType::Kopija` šalje `kopija`), pa su kroz SDK `null`. `duplikat` je `null`
+poslatu sa `tip_racuna: "copy"` i `original_broj_racuna`. SDK takav zahtev šalje kad uz
+`InvoiceType::Kopija` postavite `setOriginalInvoiceNumber()` (vidi „Kopija računa“); bez
+broja originala su `null`. `duplikat` je `null`
 kad zahtev nije nosio broj računa. Izuzetak se baca samo za HTTP grešku (vidi „Error handling“).
 
 ## API Metode
@@ -128,12 +129,49 @@ Customer::pravnoLice('123456789', 'Firma DOO', 'Adresa 1', 'Beograd');
 // Fizičko lice (JMBG - 13 cifara)
 Customer::fizickoLice('1234567890123', 'Petar Petrović');
 
-// Javni sektor (JBKJS)
-Customer::javniSektor('12345', 'Ministarstvo');
+// Javni sektor (PIB i JBKJS kupca)
+Customer::javniSektor('54321', 'Ministarstvo', pib: '123456789');
 
 // Anonimni kupac
 Customer::anonimni('email@example.com');
 ```
+
+Identifikacija kupca se šalje kao `pib`, `jmbg` ili `jbkjs` (osim kod
+`Customer::javniSektor()` bez `$pib`, vidi ispod); server od nje pravi oznaku kupca za
+Poresku upravu (`10:PIB`, `11:JMBG`, `12:PIB:JBKJS`), a PIB (`pravnoLice()`) i JMBG
+(`fizickoLice()`) čuva uz račun, kao i ime, adresu, email i telefon. Za kupca iz
+`Customer::javniSektor()` (sa `$pib` i bez njega) server ne čuva PIB ni JBKJS uz račun: oni
+idu samo u oznaku kupca za Poresku upravu. Mesto kupca (`mesto`) se šalje, ali ga server ne
+čuva (ne vidi se na računu ni u listi računa).
+
+Za kupca iz javnog sektora Poreska uprava, po tehničkom uputstvu PURS-a, traži PIB i JBKJS
+kupca: `Customer::javniSektor()` sa `$pib` šalje `jbkjs: "PIB:JBKJS"`, pa je oznaka za
+primer iznad `12:123456789:54321`. PIB mora imati tačno 9 cifara, a JBKJS tačno 5, bez
+belina i drugih znakova; inače se baca `InvalidArgumentException` pre slanja. Vrednost već
+u obliku `PIB:JBKJS` bez `$pib` (`Customer::javniSektor('123456789:54321')`) šalje se isto.
+
+Bez `$pib` `Customer::javniSektor()` šalje kupca kao 1.1.1: `tip: "javni_sektor"` i
+`identifikator` sa vrednošću kakvu ste prosledili, bez provere i bez uklanjanja belina.
+Server takav račun izdaje ili odbija kao do sada: vrednost od 9 cifara izdaje sa oznakom
+`10:PIB`, vrednost od 13 cifara sa oznakom `11:JMBG`, a JBKJS od 5 cifara odbija. Za kupca
+iz javnog sektora navedite i PIB.
+
+Kod `Customer::pravnoLice()` i `Customer::fizickoLice()` razmak, tab, novi red, CR, NUL i
+vertikalni tab na krajevima PIB-a, odnosno JMBG-a, uklanjaju se pre provere i ne šalju se:
+`Customer::pravnoLice("123456789\n")` šalje `pib: "123456789"`.
+
+Avansni račun za kupca iz javnog sektora sa JBKJS-om server još ne prima („Kupac (PIB ili
+JMBG) je obavezan za avansne račune“): za avans koristite `Customer::pravnoLice()` sa PIB-om
+kupca.
+
+## Šifra artikla
+
+`sifra` u `InvoiceItem` se šalje kao `sifra_artikla` i čuva uz stavku računa. Šifra može
+imati najviše 50 znakova (`InvoiceItem::MAX_SIFRA_DUZINA`, prati granicu servera; razmaci
+na kraju se ne broje). Šifra duža od 50 znakova se ne šalje i ne čuva, kao do 1.1.1: račun
+se izdaje bez šifre te stavke, jer bi server inače odbio ceo račun. Prazna šifra (`''`,
+npr. proizvod bez SKU-a) se ne šalje: stavka se čuva bez šifre, kao do 1.1.1. Svojstvo
+`sifra` zadržava celu vrednost.
 
 ## PDV kategorije (za 0% PDV)
 
@@ -228,6 +266,50 @@ if (!$finalResult->isSuccess()) {
 Neuspeh fiskalizacije nije izuzetak (vidi „Brzi početak“), pa posle svakog koraka proverite
 `isSuccess()` i stanite pre sledećeg `setReferentDocument()`: neuspeo korak ima prazan
 `pfrBroj`, pa sledeći račun ne bi imao ispravnu referencu.
+
+## Kopija računa
+
+```php
+use Efiskalizacija\Enum\InvoiceType;
+
+$original = $client->fiskalizacija()->fiskalizuj($invoice); // račun iz „Brzi početak“
+if (!$original->isSuccess()) {
+    throw new RuntimeException('Original nije fiskalizovan: ' . $original->poruka);
+}
+
+$kopija = Invoice::create()
+    ->setInvoiceNumber('SHOP-2026-001-K1') // sopstveni broj kopije, ne broj originala
+    ->setInvoiceType(InvoiceType::Kopija)
+    ->setOriginalInvoiceNumber($original->brojRacuna) // broj koji je sistem dodelio originalu
+    ->setReferentDocument($original->pfrBroj)
+    ->setPaymentType(PaymentType::Kartica)
+    ->addItem(new InvoiceItem(naziv: 'Laptop', kolicina: 1, jedinicnaCena: 85000.00, pdvStopa: 20));
+
+$result = $client->fiskalizacija()->fiskalizuj($kopija);
+
+if ($result->isSuccess()) {
+    // kopija je izdata: $result->pfrBroj
+} elseif ($result->errorCode === 'copy_already_issued') {
+    // kopija ovog broja je već izdata: $result->existingCopyInvoiceId
+} elseif ($result->errorCode === 'copy_in_progress') {
+    // druga kopija istog broja je upravo u obradi; pokušajte ponovo kasnije
+} else {
+    throw new RuntimeException('Kopija nije izdata: ' . $result->poruka);
+}
+```
+
+Kopija ima sopstveni broj računa (`setInvoiceNumber()`), kao svaki fiskalni dokument: isti
+broj kao original server odbija („broj_racuna je već upotrebljen za drugi tip računa“,
+`EfiskalizacijaException` sa kodom 409). Original se proverava pre kopije: `brojRacuna` i
+`pfrBroj` originala koristite samo kad je njegov `isSuccess()` true.
+
+Uz `setOriginalInvoiceNumber()` (od 1.2.0) zahtev nosi `tip_racuna: "copy"` i
+`original_broj_racuna`: kopija dobija broj originala, a server drugu kopiju istog broja
+odbija pre slanja Poreskoj upravi (`errorCode`, vidi „Brzi početak“). Broj originala je
+`brojRacuna` iz rezultata originala (ne broj iz `setInvoiceNumber()`), najviše 50 znakova.
+`setOriginalInvoiceNumber()` važi samo uz `InvoiceType::Kopija`: za drugi tip `fiskalizuj()`
+baca `LogicException` pre slanja. Bez broja originala `InvoiceType::Kopija` se šalje kao
+`tip_racuna: "kopija"` (kao do 1.1.1): server dodeljuje nov broj i druge kopije ne proverava.
 
 ## Idempotency
 
@@ -332,10 +414,35 @@ neizmenjen.
   ključeve sa vrha. Nova svojstva: `klijentskiBroj`, `brojRacuna` (`invoice_number`),
   `success`, `datumIzdavanja`, `errorMessage`, `timestamp`. `status` je izveden iz
   `success` (`success` / `error`) kad ga telo ne nosi. `isFiscalized()` i `isFailed()`
-  su bez promene.
+  su bez promene. Za račun izdat sa 1.2.0 `invoice.fiscalized` nosi i `data.kupac.pib` /
+  `data.kupac.jmbg` i `data.stavke[].sifra_artikla` (server ih čita iz kolona upisanih uz
+  račun; do 1.1.1 PIB i JMBG nisu bili u `data.kupac`, a `sifra_artikla` je bio `null`);
+  čitaju se iz `rawData`.
 - **`Invoice::setAdvertisementText()`** šalje `reklamni_tekst`: server ga čuva i štampa na
   računu. `Invoice::setNote()` je `@deprecated` (korensko `napomena` se ne čuva uz račun); šalje
   se kao do sada.
+- **Šifra artikla se čuva.** `InvoiceItem` šalje `sifra` kao `sifra_artikla`, ključ koji
+  server čuva uz stavku (do 1.1.1 `sifra`, koju server nije čitao, pa se šifra gubila).
+  Šifra duža od 50 znakova se ne šalje i ne čuva (kao do 1.1.1), pa račun i dalje prolazi
+  (vidi „Šifra artikla“).
+- **Kupac pod ključevima koje server čita.** `Customer::toArray()` šalje `pib`, `jmbg` ili
+  `jbkjs` umesto `tip` + `identifikator` (osim `Customer::javniSektor()` bez `$pib`): server
+  sada čuva PIB i JMBG kupca uz račun. Oznaka kupca za Poresku upravu za PIB i JMBG je ista
+  kao ranije. `mesto` se šalje kao do sada, ali ga server ne čuva.
+- **Javni sektor po uputstvu PURS-a.** `Customer::javniSektor()` ima nov parametar `$pib` na
+  kraju. Sa njim šalje PIB i JBKJS kupca (`jbkjs: "PIB:JBKJS"`, oznaka `12:PIB:JBKJS`); PIB
+  mora imati tačno 9, a JBKJS tačno 5 cifara, inače se baca `InvalidArgumentException` pre
+  slanja. Bez `$pib` šalje kupca bajt-isto kao 1.1.1 (`tip` + `identifikator`), pa server
+  takav račun izdaje ili odbija kao do sada; jedini izuzetak je vrednost u obliku
+  `PIB:JBKJS`, koja se šalje kao `jbkjs`. Do 1.1.1 server je račun za javni sektor sa
+  JBKJS-om odbijao (`identifikator` od 5 cifara). Kod `pravnoLice()` i `fizickoLice()`
+  beline na krajevima PIB-a i JMBG-a se uklanjaju pre provere i ne šalju se.
+- **Kopija sa brojem originala.** `Invoice::setOriginalInvoiceNumber()` uz
+  `InvoiceType::Kopija` šalje `tip_racuna: "copy"` i `original_broj_racuna`, pa server
+  odbija drugu kopiju istog broja i popunjava `errorCode` / `existingCopyInvoiceId` (vidi
+  „Kopija računa“). Bez nje kopija se šalje kao u 1.1.1.
+- **`TenantStatus::$unlimitedInvoices`**: `true` kad nalog nema mesečni limit računa
+  (server šalje `max_invoices_per_month: null`); `maxInvoicesPerMonth` je tada i dalje 0.
 
 - **Ponavljanje zahteva čiji ishod nije poznat.** SDK sam ponavlja samo zahtev bezbedan
   za ponavljanje: GET i `POST /fiskalizacija` čije telo nosi `broj_racuna` koji posle
@@ -369,14 +476,17 @@ neizmenjen.
 - `Invoice::setIdempotencyKey()` / `getIdempotencyKey()` su `@deprecated`: ključ se ni
   ranije nije slao serveru. Zaštita od duplog računa je `setInvoiceNumber()`.
 - Potpis zahteva (v2) je bez promene. Potpisi postojećih javnih metoda su isti, osim
-  konstruktora koji su dobili nove opcione parametre na kraju (podrazumevano `null`, pa
-  postojeći pozivi rade bez izmene): `NetworkException` (`requestSent`, vidi gore),
+  `Customer::javniSektor(string $jbkjs, ?string $ime = null, ?string $email = null, ?string $pib = null)`
+  (nov opcioni parametar `$pib` na kraju) i konstruktora koji su dobili nove opcione
+  parametre na kraju (podrazumevano `null`, pa postojeći pozivi rade bez izmene): `NetworkException` (`requestSent`, vidi gore),
   `FiskalizacijaResult` (`success`, `status`, `brojRacuna`, `klijentskiBroj`, `duplikat`,
   `ukupanIznos`, `pfrDatumVreme`, `qrUrl`, `esirOznaka`, `errorCode`,
-  `existingCopyInvoiceId`) i `WebhookPayload` (`klijentskiBroj`, `brojRacuna`, `success`,
-  `datumIzdavanja`, `errorMessage`, `timestamp`). Nove metode su
+  `existingCopyInvoiceId`), `WebhookPayload` (`klijentskiBroj`, `brojRacuna`, `success`,
+  `datumIzdavanja`, `errorMessage`, `timestamp`) i `TenantStatus` (`unlimitedInvoices`,
+  podrazumevano `false`). Nove metode su
   `FiskalizacijaResult::isSuccess()`, `Invoice::setAdvertisementText()`,
-  `FiskalizacijaResult::__unserialize()` i `WebhookPayload::__unserialize()` (vidi
+  `Invoice::setOriginalInvoiceNumber()`, `FiskalizacijaResult::__unserialize()`,
+  `WebhookPayload::__unserialize()` i `TenantStatus::__unserialize()` (vidi
   „Nadogradnja na 1.2.0“).
 
 ### Promene u 1.1.1
@@ -444,19 +554,42 @@ zahteva je isto kao u 1.1.1; rezultat i webhook sada nose polja koja su ranije b
   `pfrBroj` i dalje prazan string.
 - **Webhook handler**: `pfrBroj`, `racunId` i `iznos` su do 1.1.1 za telo servera bili
   `null` (polja su u `data`); sada nose vrednost. Porudžbinu povežite po `klijentskiBroj`.
+  Za račune izdate sa 1.2.0 `rawData` nosi i `data.kupac.pib` / `data.kupac.jmbg` i
+  `data.stavke[].sifra_artikla`; handler koji je očekivao da ih nema dobija vrednost.
 - **`setNote()`**: tekst se ne čuva uz račun (ne vidi se na računu, u listi računa ni u
   admin panelu). Za tekst na računu koristite
   `setAdvertisementText()` — štampa se na računu, pa ne šaljite interne beleške.
-- **`FiskalizacijaResult` ili `WebhookPayload` sačuvan kroz `serialize()`** (keš, red
-  poruka, sesija) sa 1.1.1 ili starijom verzijom: `unserialize()` sa 1.2.0 radi, sačuvana
-  svojstva zadržavaju vrednost, a nova (`success`, `duplikat`, `klijentskiBroj`…) su `null`.
-  `isSuccess()` za takav rezultat odlučuje po `pfrBroj`.
+- **Šifra artikla (`InvoiceItem` sa `sifra`)**: šifra se sada čuva uz stavku. Šifra
+  duža od 50 znakova se ne šalje i ne čuva, kao do 1.1.1 (račun se izdaje); ako je šifra
+  potrebna uz račun, skratite je pre slanja.
+- **Kod ili test koji čita `Customer::toArray()` / `InvoiceItem::toArray()`**: kupac nosi
+  `pib`, `jmbg` ili `jbkjs` umesto `tip` i `identifikator` (`Customer::javniSektor()` bez
+  `$pib` i dalje nosi `tip` i `identifikator`), a stavka `sifra_artikla` umesto `sifra`.
+  Javni konstruktori i fabrike (`Customer::pravnoLice()` …) su isti.
+- **`Customer::javniSektor()`**: postojeći pozivi (bez `$pib`) šalju isto telo kao u 1.1.1,
+  pa server račun izdaje ili odbija kao do sada. Za oznaku kupca `12:PIB:JBKJS` dodajte PIB
+  kupca kao nov parametar na kraju: `Customer::javniSektor('54321', pib: '123456789')`; do
+  1.1.1 server je račun sa JBKJS-om odbijao. Avans za javni sektor izdajte kroz
+  `Customer::pravnoLice()`.
+- **Kopija računa** (`InvoiceType::Kopija`): bez promene dok ne pozovete
+  `setOriginalInvoiceNumber()` (vidi „Kopija računa“).
+- **`TenantStatus::$maxInvoicesPerMonth`** je 0 i za nalog bez limita; proverite prvo
+  `unlimitedInvoices`.
+- **`FiskalizacijaResult`, `WebhookPayload`, `TenantStatus` ili `Invoice` sačuvan kroz
+  `serialize()`** (keš, red poruka, sesija) sa 1.1.1 ili starijom verzijom: `unserialize()`
+  sa 1.2.0 radi, sačuvana svojstva zadržavaju vrednost, a nova (`success`, `duplikat`,
+  `klijentskiBroj`…) su `null`; `unlimitedInvoices` je `false`, a `Invoice` se šalje kao
+  ranije (bez broja originala). Kupac iz `Customer::javniSektor()` sačuvan sa 1.1.1 šalje se
+  kao u 1.1.1 (`tip` + `identifikator`), osim vrednosti u obliku `PIB:JBKJS`, koja ide kao
+  `jbkjs`. `isSuccess()` za takav rezultat odlučuje po `pfrBroj`.
 
 Povratak na 1.1.x (`composer require infogrambeg/efiskalizacija-php-sdk:1.1.1`) radi:
 objekat koji je serijalizovala 1.2.0, a deserijalizuje ga 1.1.x, zadržava vrednosti
 svojstava koja postoje u 1.1.x. Na PHP ≥ 8.2 svako svojstvo dodato u 1.2.0 pri tome daje
 E_DEPRECATED „Creation of dynamic property“ (11 kod `FiskalizacijaResult`, 6 kod
-`WebhookPayload`); vrednosti se čitaju normalno.
+`WebhookPayload`, 1 kod `TenantStatus` i 2 kod `Invoice`); vrednosti se čitaju normalno.
+`Invoice` sa brojem originala 1.1.x šalje kao kopiju bez broja originala
+(`tip_racuna: "kopija"`), a 1.1.x šifru artikla i kupca šalje pod starim ključevima.
 
 ### Nadogradnja sa 1.0.x
 

@@ -12,8 +12,9 @@ use PHPUnit\Framework\TestCase;
  * nego što `pfrBroj` tog rezultata ode u `setReferentDocument()`.
  *
  * README, „Brzi početak": `errorCode` i `existingCopyInvoiceId` server
- * popunjava samo za `tip_racuna: "copy"` uz `original_broj_racuna`, a SDK
- * takav zahtev ne šalje (`InvoiceType::Kopija` šalje `kopija`).
+ * popunjava samo za `tip_racuna: "copy"` uz `original_broj_racuna`; SDK ga
+ * šalje samo uz `setOriginalInvoiceNumber()` (od 1.2.0), inače `InvoiceType::Kopija`
+ * šalje `kopija` kao do 1.1.1.
  *
  * @trace R1
  */
@@ -35,13 +36,15 @@ final class ReadmeAvansniLanacTest extends TestCase
         }
     }
 
-    public function testKodGreskeKopijeNijeObecanKrozSdk(): void
+    public function testKodGreskeKopijeSamoUzBrojOriginala(): void
     {
         $readme = (string) preg_replace('/\s+/u', ' ', self::readme());
 
         self::assertStringContainsString('`tip_racuna: "copy"`', $readme);
         self::assertStringContainsString('`original_broj_racuna`', $readme);
-        self::assertStringContainsString('SDK takav zahtev trenutno ne šalje', $readme);
+        self::assertStringContainsString('SDK takav zahtev šalje kad uz `InvoiceType::Kopija` postavite `setOriginalInvoiceNumber()`', $readme);
+        self::assertStringContainsString('bez broja originala su `null`', $readme);
+        self::assertStringNotContainsString('trenutno ne šalje', $readme); // @trace R4
         self::assertStringNotContainsString('"copy_already_issued" / "copy_in_progress" ili null', $readme);
         self::assertSame('kopija', \Efiskalizacija\Enum\InvoiceType::Kopija->value);
     }

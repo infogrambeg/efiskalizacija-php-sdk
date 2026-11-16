@@ -74,7 +74,7 @@ final class InvoiceTest extends TestCase
 
         // Prva stavka
         $this->assertSame('Laptop', $data['stavke'][0]['naziv']);
-        $this->assertSame('LAP-001', $data['stavke'][0]['sifra']);
+        $this->assertSame('LAP-001', $data['stavke'][0]['sifra_artikla']); // @trace R1
         $this->assertSame('1234567890123', $data['stavke'][0]['gtin']);
 
         // Druga stavka
@@ -82,8 +82,7 @@ final class InvoiceTest extends TestCase
         $this->assertSame(10.0, $data['stavke'][1]['rabat_procenat']);
 
         // Kupac
-        $this->assertSame('pravno_lice', $data['kupac']['tip']);
-        $this->assertSame('123456789', $data['kupac']['identifikator']);
+        $this->assertSame(['ime' => 'Firma DOO', 'pib' => '123456789'], $data['kupac']); // @trace R2
 
         // Idempotency key
         $this->assertSame('wc:a1b2c3d4:1234', $invoice->getIdempotencyKey());
